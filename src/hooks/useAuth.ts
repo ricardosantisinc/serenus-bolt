@@ -1,348 +1,316 @@
 import { useState, useEffect, useCallback } from 'react';
+import { User, Permission, Company, CheckupResult, CompanyCheckupSettings, UserProfileUpdate, SubscriptionPlan, CompanyRecommendation } from '../types';
+
+// Importar funções de armazenamento
+import {
+  loadUsersFromStorage,
+  saveUsersToStorage,
+  saveUserToStorage,
+  removeUserFromStorage,
+  loadCompaniesFromStorage,
+  saveCompaniesToStorage,
+  removeCompanyFromStorage,
+  loadSubscriptionPlansFromStorage,
+  saveSubscriptionPlansToStorage
+} from '../utils/userStorage';
+
+// Importar funções de validação
 import { 
-  User, 
-  Company, 
-  CheckupResult, 
-  CompanyCheckupSettings, 
-  CompanyRecommendation,
-  UserProfileUpdate,
-  SubscriptionPlan 
-} from '../types';
+  validateEmail, 
+  validatePassword, 
+  getRoleDisplayName as getRoleLabel
+} from '../utils/userValidation';
+
+// Importar cliente Supabase (para uso futuro com backend real)
 import { supabase } from '../lib/supabase';
-import { getHighestSeverityLevel } from '../utils/dass21Calculator';
+
+// ID do Super Admin para verificações
+const SUPER_ADMIN_ID = 'admin-123';
+
+// Mock data inicial
+let mockUsers: Record<string, User> = {
+  'admin@serenus.com': {
+    id: SUPER_ADMIN_ID,
+    name: 'Administrador',
+    email: 'admin@serenus.com',
+    role: 'super_admin',
+    permissions: [],
+    avatar: 'https://images.pexels.com/photos/3768911/pexels-photo-3768911.jpeg?auto=compress&cs=tinysrgb&w=400',
+    isActive: true,
+    createdAt: new Date('2025-01-01')
+  }
+};
+
+let mockCompanies: Record<string, Company> = {};
+
+let mockSubscriptionPlans: Record<string, SubscriptionPlan> = {
+  'plan1': {
+    id: 'plan1',
+    name: 'Básico',
+    value: 29.90,
+    periodicity: 'monthly',
+    features: ['Até 50 usuários', 'Checkups mensais', 'Relatórios básicos', 'Suporte por email'],
+    isActive: true,
+    createdAt: new Date('2025-01-01'),
+    description: 'Plano ideal para pequenas empresas iniciando sua jornada de bem-estar'
+  },
+  'plan2': {
+    id: 'plan2',
+    name: 'Premium',
+    value: 79.90,
+    periodicity: 'monthly',
+    features: ['Até 200 usuários', 'Checkups personalizáveis', 'Relatórios avançados', 'Recomendações personalizadas', 'Suporte prioritário'],
+    isActive: true,
+    createdAt: new Date('2025-01-01'),
+    description: 'Recursos avançados para empresas em crescimento'
+  },
+  'plan3': {
+    id: 'plan3',
+    name: 'Enterprise',
+    value: 199.90,
+    periodicity: 'monthly',
+    features: ['Até 1000 usuários', 'API dedicada', 'Checkups customizados', 'Relatórios completos', 'Integração com outros sistemas', 'Suporte 24/7'],
+    isActive: true,
+    createdAt: new Date('2025-01-01'),
+    description: 'Solução completa para grandes organizações'
+  }
+};
+
+// Mock de configurações de checkup por empresa
+const mockCompanyCheckupSettings: Record<string, CompanyCheckupSettings> = {};
+
+// Mock de recomendações por empresa
+const mockCompanyRecommendations: Record<string, CompanyRecommendation[]> = {};
 
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-  // Verificar e restaurar sessão ao iniciar
+  const [companies, setCompanies] = useState<Record<string, Company>>({});
+  const [subscriptionPlans, setSubscriptionPlans] = useState<Record<string, SubscriptionPlan>>({});
+  
+  // Inicialização
   useEffect(() => {
-    const checkSession = async () => {
-      setIsLoading(true);
-      
+    // Carregar dados do localStorage na inicialização
+    const storedUsers = loadUsersFromStorage();
+    const storedCompanies = loadCompaniesFromStorage();
+    const storedPlans = loadSubscriptionPlansFromStorage();
+
+    // Inicializar usuários
+    if (storedUsers) {
+      mockUsers = storedUsers;
+    } else {
+      // Salvar dados padrão no localStorage
+      saveUsersToStorage(mockUsers);
+    }
+
+    // Inicializar empresas
+    if (storedCompanies) {
+      mockCompanies = storedCompanies;
+      setCompanies(storedCompanies);
+    } else {
+      setCompanies(mockCompanies);
+    }
+
+    // Inicializar planos de assinatura
+    if (storedPlans) {
+      mockSubscriptionPlans = storedPlans;
+      setSubscriptionPlans(storedPlans);
+    } else {
+      setSubscriptionPlans(mockSubscriptionPlans);
+    }
+
+    // Verificar se há sessão de usuário
+    const savedUser = localStorage.getItem('currentUser');
+    if (savedUser) {
       try {
-        // Verificar se há uma sessão ativa
-        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        const userData = JSON.parse(savedUser);
+        // Converter strings de data para objetos Date
+        if (userData.createdAt) userData.createdAt = new Date(userData.createdAt);
+        if (userData.updatedAt) userData.updatedAt = new Date(userData.updatedAt);
+        if (userData.lastCheckup) userData.lastCheckup = new Date(userData.lastCheckup);
+        if (userData.nextCheckup) userData.nextCheckup = new Date(userData.nextCheckup);
         
-        if (sessionError) {
-          console.error('Erro ao verificar sessão:', sessionError);
-          return;
-        }
-        
-        // Se há uma sessão ativa, buscar dados do usuário
-        if (sessionData?.session) {
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', sessionData.session.user.id)
-            .single();
-            
-          if (userError || !userData) {
-            console.error('Erro ao buscar dados do usuário:', userError);
-            return;
-          }
-          
-          // Carregar histórico de checkups do usuário
-          const { data: checkupHistory, error: checkupError } = await supabase
-            .from('checkup_results')
-            .select('*')
-            .eq('user_id', userData.id)
-            .order('created_at', { ascending: false });
-            
-          if (!checkupError && checkupHistory) {
-            // Converter datas e adicionar histórico ao usuário
-            const processedHistory = checkupHistory.map(checkup => ({
-              ...checkup,
-              date: new Date(checkup.created_at),
-              nextCheckupDate: new Date(checkup.next_checkup_date)
-            }));
-            
-            userData.checkupHistory = processedHistory;
-          }
-          
-          // Converter timestamps para objetos Date
-          if (userData.last_checkup_date) {
-            userData.lastCheckup = new Date(userData.last_checkup_date);
-          }
-          if (userData.next_checkup_date) {
-            userData.nextCheckup = new Date(userData.next_checkup_date);
-          }
-          if (userData.created_at) {
-            userData.createdAt = new Date(userData.created_at);
-          }
-          if (userData.updated_at) {
-            userData.updatedAt = new Date(userData.updated_at);
-          }
-          
-          // Mapear dados do banco para o formato do app
-          const mappedUser: User = {
-            id: userData.id,
-            name: userData.name,
-            email: userData.email,
-            role: userData.role,
-            companyId: userData.company_id,
-            department: userData.department,
-            avatar: userData.avatar_url,
-            lastCheckup: userData.lastCheckup,
-            nextCheckup: userData.nextCheckup,
-            isActive: userData.is_active,
-            birthDate: userData.birth_date ? new Date(userData.birth_date) : undefined,
-            gender: userData.gender,
-            createdAt: userData.createdAt,
-            updatedAt: userData.updatedAt,
-            checkupHistory: userData.checkupHistory,
-            permissions: [] // Será preenchido com base na role
-          };
-          
-          // Atribuir permissões com base na role
-          mappedUser.permissions = getPermissionsByRole(mappedUser.role);
-          
-          setUser(mappedUser);
-          setIsAuthenticated(true);
-        }
+        setUser(userData);
       } catch (error) {
-        console.error('Erro ao verificar autenticação:', error);
-      } finally {
-        setIsLoading(false);
+        console.error('Erro ao processar sessão do usuário:', error);
+        localStorage.removeItem('currentUser');
       }
-    };
-    
-    checkSession();
+    }
+
+    setIsLoading(false);
   }, []);
 
-  // Função para fazer login
-  const login = useCallback(async (email: string, password: string) => {
-    setIsLoading(true);
-    
+  // Salvar usuário atual no localStorage
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('currentUser', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('currentUser');
+    }
+  }, [user]);
+
+  // Login
+  const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     try {
-      // Autenticar usando Supabase
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-      
-      if (error) {
-        console.error('Erro de login:', error.message);
+      setIsLoading(true);
+
+      // Em uma aplicação real, aqui faria a autenticação com Supabase
+      // const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+      // Simular autenticação
+      const user = Object.values(mockUsers).find(
+        u => u.email.toLowerCase() === email.toLowerCase()
+      );
+
+      if (!user) {
+        console.log('Usuário não encontrado:', email);
         return false;
       }
-      
-      if (!data.user || !data.session) {
-        console.error('Autenticação falhou: Dados do usuário não encontrados');
+
+      // Em aplicação real, verificaria senha com bcrypt
+      // Em mock, apenas verificamos se é a senha padrão para admin ou "senha123" para outros
+      const isAdmin = user.role === 'super_admin' && email === 'admin@serenus.com';
+      const validPassword = isAdmin ? password === 'admin123456' : password === 'senha123';
+
+      if (!validPassword) {
+        console.log('Senha inválida para:', email);
         return false;
       }
-      
-      // Buscar informações completas do usuário
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', data.user.id)
-        .single();
+
+      // Gerar histórico mock de checkup se não existir
+      if (!user.checkupHistory) {
+        const date = new Date();
+        date.setDate(date.getDate() - 30);
         
-      if (userError || !userData) {
-        console.error('Erro ao buscar dados do usuário:', userError);
-        return false;
+        user.lastCheckup = date;
+        user.nextCheckup = new Date();
+        user.checkupHistory = [
+          {
+            id: 'checkup1',
+            userId: user.id,
+            companyId: user.companyId || '',
+            date: date,
+            responses: [],
+            scores: { stress: 16, anxiety: 8, depression: 12 },
+            classifications: { stress: 'leve', anxiety: 'leve', depression: 'leve' },
+            overallScore: 78,
+            severityLevel: 'leve',
+            nextCheckupDate: new Date()
+          }
+        ];
       }
-      
-      // Carregar histórico de checkups do usuário
-      const { data: checkupHistory, error: checkupError } = await supabase
-        .from('checkup_results')
-        .select('*')
-        .eq('user_id', userData.id)
-        .order('created_at', { ascending: false });
-        
-      if (!checkupError && checkupHistory) {
-        // Converter datas e adicionar histórico ao usuário
-        const processedHistory = checkupHistory.map(checkup => ({
-          ...checkup,
-          date: new Date(checkup.created_at),
-          nextCheckupDate: new Date(checkup.next_checkup_date)
-        }));
-        
-        userData.checkupHistory = processedHistory;
-      }
-      
-      // Converter timestamps para objetos Date
-      if (userData.last_checkup_date) {
-        userData.lastCheckup = new Date(userData.last_checkup_date);
-      }
-      if (userData.next_checkup_date) {
-        userData.nextCheckup = new Date(userData.next_checkup_date);
-      }
-      if (userData.created_at) {
-        userData.createdAt = new Date(userData.created_at);
-      }
-      if (userData.updated_at) {
-        userData.updatedAt = new Date(userData.updated_at);
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const mappedUser: User = {
-        id: userData.id,
-        name: userData.name,
-        email: userData.email,
-        role: userData.role,
-        companyId: userData.company_id,
-        department: userData.department,
-        avatar: userData.avatar_url,
-        lastCheckup: userData.lastCheckup,
-        nextCheckup: userData.nextCheckup,
-        isActive: userData.is_active,
-        birthDate: userData.birth_date ? new Date(userData.birth_date) : undefined,
-        gender: userData.gender,
-        createdAt: userData.createdAt,
-        updatedAt: userData.updatedAt,
-        checkupHistory: userData.checkupHistory,
-        permissions: [] // Será preenchido com base na role
-      };
-      
-      // Atribuir permissões com base na role
-      mappedUser.permissions = getPermissionsByRole(mappedUser.role);
-      
-      setUser(mappedUser);
-      setIsAuthenticated(true);
-      
+
+      setUser(user);
       return true;
     } catch (error) {
-      console.error('Erro inesperado durante login:', error);
+      console.error('Erro no login:', error);
       return false;
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Função para fazer logout
-  const logout = useCallback(async () => {
-    setIsLoading(true);
-    
+  // Logout
+  const logout = useCallback(() => {
+    // Em uma aplicação real, faria logout do Supabase
+    // supabase.auth.signOut();
+    setUser(null);
+  }, []);
+
+  // Atualizar perfil do usuário
+  const updateProfile = useCallback(async (profileData: UserProfileUpdate): Promise<{ success: boolean; message: string }> => {
     try {
-      const { error } = await supabase.auth.signOut();
-      
-      if (error) {
-        console.error('Erro ao fazer logout:', error.message);
+      if (!user) {
+        return { success: false, message: 'Usuário não autenticado' };
       }
+
+      setIsLoading(true);
+
+      // Em uma aplicação real, atualizaria o perfil no Supabase
+      // const { data, error } = await supabase.from('users').update({...}).eq('id', user.id);
+
+      // Validar senha atual (simulação)
+      if (profileData.currentPassword) {
+        const isAdmin = user.role === 'super_admin' && user.email === 'admin@serenus.com';
+        const validPassword = isAdmin 
+          ? profileData.currentPassword === 'admin123456' 
+          : profileData.currentPassword === 'senha123';
+        
+        if (!validPassword) {
+          return { success: false, message: 'Senha atual incorreta' };
+        }
+      }
+
+      // Atualizar mock do usuário
+      const updatedUser: User = {
+        ...user,
+        name: profileData.name,
+        birthDate: profileData.birthDate,
+        gender: profileData.gender,
+        updatedAt: new Date()
+      };
+
+      // Atualizar no mock
+      mockUsers[user.email] = updatedUser;
+
+      // Atualizar localStorage
+      saveUserToStorage(updatedUser);
+
+      // Atualizar estado
+      setUser(updatedUser);
+
+      return { success: true, message: 'Perfil atualizado com sucesso' };
     } catch (error) {
-      console.error('Erro inesperado durante logout:', error);
+      return { success: false, message: 'Erro ao atualizar perfil' };
     } finally {
-      setUser(null);
-      setIsAuthenticated(false);
       setIsLoading(false);
     }
-  }, []);
+  }, [user]);
 
-  // Função auxiliar para obter permissões com base na role
-  const getPermissionsByRole = (role: User['role']): string[] => {
-    switch (role) {
-      case 'super_admin':
-        return ['system_settings', 'view_all_data', 'manage_users', 'manage_companies'];
-      case 'gerente':
-        return ['manage_users', 'view_team_data'];
-      case 'colaborador':
-      default:
-        return [];
-    }
-  };
+  // Verificar autenticação
+  const isAuthenticated = useCallback(() => {
+    return user !== null;
+  }, [user]);
 
-  // Função para verificar permissão
-  const hasPermission = useCallback((permission: string) => {
+  // Verificar permissão
+  const hasPermission = useCallback((permission: string): boolean => {
+    // Permissões baseadas em role
     if (!user) return false;
-    
-    // Super admin tem todas as permissões
-    if (user.role === 'super_admin') return true;
-    
-    // Verificar se o usuário tem a permissão específica
-    return user.permissions.includes(permission);
+
+    switch (permission) {
+      case 'view_all_data':
+        return user.role === 'super_admin';
+      case 'view_team_data':
+        return ['super_admin', 'gerente'].includes(user.role);
+      case 'manage_users':
+        return ['super_admin', 'gerente'].includes(user.role);
+      case 'manage_companies':
+        return user.role === 'super_admin';
+      case 'system_settings':
+        return user.role === 'super_admin';
+      case 'view_checkups':
+        return true; // Todos podem ver seus próprios checkups
+      default:
+        return false;
+    }
   }, [user]);
 
-  // Função para obter o nome amigável da role
+  // Retornar rótulo amigável para role
   const getRoleDisplayName = useCallback((role: User['role']): string => {
-    const roleNames: Record<string, string> = {
-      'super_admin': 'Super Administrador',
-      'gerente': 'Gerente',
-      'colaborador': 'Colaborador'
-    };
-    
-    return roleNames[role] || role;
+    return getRoleLabel(role);
   }, []);
 
-  // Função para obter todas as empresas
-  const getCompanies = useCallback(async (): Promise<Company[]> => {
-    try {
-      let query = supabase.from('companies').select('*');
-      
-      // Se não for super_admin, filtrar apenas a empresa do usuário
-      if (user && user.role !== 'super_admin' && user.companyId) {
-        query = query.eq('id', user.companyId);
-      }
-      
-      const { data, error } = await query;
-      
-      if (error) {
-        console.error('Erro ao buscar empresas:', error.message);
-        return [];
-      }
-      
-      // Mapear dados do banco para o formato do app
-      return data.map(company => ({
-        id: company.id,
-        name: company.name,
-        domain: company.domain,
-        contactPerson: company.contact_person,
-        corporateEmail: company.corporate_email,
-        landlinePhone: company.landline_phone,
-        mobilePhone: company.mobile_phone,
-        logo: company.logo_url,
-        isActive: company.is_active,
-        plan: company.plan_type,
-        maxUsers: company.max_users,
-        currentUsers: company.current_users,
-        subscriptionPlanId: company.subscription_plan_id,
-        createdAt: new Date(company.created_at)
-      }));
-    } catch (error) {
-      console.error('Erro inesperado ao buscar empresas:', error);
-      return [];
-    }
-  }, [user]);
+  // Obter lista de empresas
+  const getCompanies = useCallback((): Company[] => {
+    return Object.values(companies);
+  }, [companies]);
 
-  // Função para obter uma empresa pelo ID
-  const getCompanyById = useCallback(async (companyId: string): Promise<Company | undefined> => {
-    try {
-      const { data, error } = await supabase
-        .from('companies')
-        .select('*')
-        .eq('id', companyId)
-        .single();
-        
-      if (error) {
-        console.error('Erro ao buscar empresa:', error.message);
-        return undefined;
-      }
-      
-      // Mapear dados do banco para o formato do app
-      return {
-        id: data.id,
-        name: data.name,
-        domain: data.domain,
-        contactPerson: data.contact_person,
-        corporateEmail: data.corporate_email,
-        landlinePhone: data.landline_phone,
-        mobilePhone: data.mobile_phone,
-        logo: data.logo_url,
-        isActive: data.is_active,
-        plan: data.plan_type,
-        maxUsers: data.max_users,
-        currentUsers: data.current_users,
-        subscriptionPlanId: data.subscription_plan_id,
-        createdAt: new Date(data.created_at)
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao buscar empresa:', error);
-      return undefined;
-    }
-  }, []);
+  // Obter empresa por ID
+  const getCompanyById = useCallback((companyId: string): Company | undefined => {
+    return companies[companyId];
+  }, [companies]);
 
-  // Função para registrar uma nova empresa
+  // Registrar nova empresa
   const registerCompany = useCallback(async (companyData: {
     name: string;
     domain: string;
@@ -355,189 +323,118 @@ export const useAuth = () => {
     logoData?: string;
   }): Promise<{ success: boolean; message: string; company?: Company }> => {
     try {
-      // Verificar se já existe uma empresa com o mesmo domínio
-      const { data: existingCompany, error: checkError } = await supabase
-        .from('companies')
-        .select('id')
-        .eq('domain', companyData.domain)
-        .single();
-        
-      if (existingCompany) {
-        return {
-          success: false,
-          message: 'Já existe uma empresa registrada com este domínio.'
-        };
-      }
+      setIsLoading(true);
       
-      // Se tiver logoData, fazer upload para o storage
-      let logo_url = '/serenus.png';
-      if (companyData.logoData) {
-        try {
-          // Gerar um nome de arquivo único
-          const fileName = `company_logo_${Date.now()}.jpg`;
-          
-          // Fazer o upload para o bucket 'logos'
-          const { data: uploadData, error: uploadError } = await supabase
-            .storage
-            .from('logos')
-            .upload(fileName, companyData.logoData, {
-              contentType: 'image/jpeg'
-            });
-            
-          if (uploadError) {
-            console.error('Erro ao fazer upload do logo:', uploadError);
-          } else if (uploadData) {
-            // Obter URL pública do logo
-            const { data: urlData } = supabase
-              .storage
-              .from('logos')
-              .getPublicUrl(fileName);
-              
-            if (urlData) {
-              logo_url = urlData.publicUrl;
-            }
-          }
-        } catch (logoError) {
-          console.error('Erro ao processar logo da empresa:', logoError);
-        }
-      }
-      
-      // Criar a empresa no banco
-      const { data: newCompany, error } = await supabase
-        .from('companies')
-        .insert([{
-          name: companyData.name,
-          domain: companyData.domain,
-          contact_person: companyData.contactPerson,
-          corporate_email: companyData.corporateEmail,
-          landline_phone: companyData.landlinePhone,
-          mobile_phone: companyData.mobilePhone,
-          logo_url,
-          is_active: true,
-          plan_type: companyData.plan,
-          max_users: companyData.maxUsers,
-          current_users: 0
-        }])
-        .select()
-        .single();
-        
-      if (error) {
-        console.error('Erro ao criar empresa:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao registrar empresa: ' + error.message
-        };
-      }
-      
-      // Criar configurações de checkup padrão para a empresa
-      await supabase
-        .from('company_checkup_settings')
-        .insert([{
-          company_id: newCompany.id,
-          normal_interval_days: 90,
-          severe_interval_days: 30,
-          auto_reminders_enabled: true
-        }]);
-        
-      // Criar recomendações padrão para a empresa
-      await supabase
-        .from('company_recommendations')
-        .insert([
-          {
-            company_id: newCompany.id,
-            title: 'Cuidados com a Saúde Mental',
-            content: 'Incentivamos todos os colaboradores a reservarem ao menos 15 minutos diários para exercícios de respiração e mindfulness.',
-            recommendation_type: 'mental_health',
-            order_index: 0
-          },
-          {
-            company_id: newCompany.id,
-            title: 'Alimentação Saudável',
-            content: 'Lembre-se de manter uma alimentação equilibrada com frutas e vegetais. Hidratação adequada também é fundamental para o bem-estar.',
-            recommendation_type: 'nutrition',
-            order_index: 1
-          }
-        ]);
-      
-      // Mapear dados do banco para o formato do app
-      const mappedCompany: Company = {
-        id: newCompany.id,
-        name: newCompany.name,
-        domain: newCompany.domain,
-        contactPerson: newCompany.contact_person,
-        corporateEmail: newCompany.corporate_email,
-        landlinePhone: newCompany.landline_phone,
-        mobilePhone: newCompany.mobile_phone,
-        logo: newCompany.logo_url,
-        isActive: newCompany.is_active,
-        plan: newCompany.plan_type,
-        maxUsers: newCompany.max_users,
-        currentUsers: newCompany.current_users,
-        createdAt: new Date(newCompany.created_at)
-      };
-      
-      return {
-        success: true,
-        message: 'Empresa registrada com sucesso!',
-        company: mappedCompany
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao registrar empresa:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao registrar a empresa. Tente novamente.'
-      };
-    }
-  }, []);
+      // Em uma aplicação real, criaria a empresa no Supabase
+      // const { data, error } = await supabase.from('companies').insert({...}).select().single();
 
-  // Função para excluir uma empresa
+      // Validações
+      if (!companyData.name || !companyData.domain || !companyData.contactPerson || 
+          !companyData.corporateEmail || !companyData.mobilePhone) {
+        return { success: false, message: 'Todos os campos obrigatórios devem ser preenchidos' };
+      }
+
+      if (!validateEmail(companyData.corporateEmail)) {
+        return { success: false, message: 'Email corporativo inválido' };
+      }
+
+      // Verificar se domínio já existe
+      if (Object.values(companies).some(c => c.domain.toLowerCase() === companyData.domain.toLowerCase())) {
+        return { success: false, message: 'Domínio já está em uso' };
+      }
+
+      // Criar nova empresa
+      const newCompany: Company = {
+        id: `company_${Date.now()}`,
+        name: companyData.name,
+        domain: companyData.domain,
+        contactPerson: companyData.contactPerson,
+        corporateEmail: companyData.corporateEmail,
+        landlinePhone: companyData.landlinePhone,
+        mobilePhone: companyData.mobilePhone,
+        logo: companyData.logoData ? `data:image/jpeg;base64,${companyData.logoData}` : '/serenus.png',
+        createdAt: new Date(),
+        isActive: true,
+        plan: companyData.plan,
+        maxUsers: companyData.maxUsers,
+        currentUsers: 0
+      };
+
+      // Atualizar estado local
+      const updatedCompanies = {
+        ...companies,
+        [newCompany.id]: newCompany
+      };
+      
+      setCompanies(updatedCompanies);
+      mockCompanies = updatedCompanies;
+
+      // Persistir no localStorage
+      saveCompaniesToStorage(updatedCompanies);
+
+      // Criar configurações de checkup padrão para a empresa
+      mockCompanyCheckupSettings[newCompany.id] = {
+        id: `settings_${Date.now()}`,
+        companyId: newCompany.id,
+        normalIntervalDays: 90,
+        severeIntervalDays: 30,
+        autoRemindersEnabled: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      return { success: true, message: 'Empresa cadastrada com sucesso!', company: newCompany };
+
+    } catch (error) {
+      console.error('Erro ao registrar empresa:', error);
+      return { success: false, message: 'Erro ao registrar empresa. Tente novamente.' };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [companies]);
+
+  // Excluir empresa
   const deleteCompany = useCallback(async (companyId: string): Promise<{ success: boolean; message: string }> => {
     try {
-      // Verificar se a empresa existe
-      const { data: company, error: checkError } = await supabase
-        .from('companies')
-        .select('name')
-        .eq('id', companyId)
-        .single();
-        
-      if (checkError) {
-        return {
-          success: false,
-          message: 'Empresa não encontrada.'
-        };
-      }
+      setIsLoading(true);
       
-      const companyName = company.name;
-      
-      // Excluir a empresa (as políticas de CASCADE nas chaves estrangeiras 
-      // garantem que todos os dados relacionados sejam excluídos)
-      const { error } = await supabase
-        .from('companies')
-        .delete()
-        .eq('id', companyId);
-        
-      if (error) {
-        console.error('Erro ao excluir empresa:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao excluir empresa: ' + error.message
-        };
-      }
-      
-      return {
-        success: true,
-        message: `Empresa "${companyName}" excluída com sucesso.`
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao excluir empresa:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao excluir a empresa. Tente novamente.'
-      };
-    }
-  }, []);
+      // Em uma aplicação real, excluiria a empresa no Supabase
+      // const { error } = await supabase.from('companies').delete().eq('id', companyId);
 
-  // Função para registrar um novo usuário
+      // Verificar se a empresa existe
+      if (!companies[companyId]) {
+        return { success: false, message: 'Empresa não encontrada' };
+      }
+
+      // Armazenar o nome para mensagem de sucesso
+      const companyName = companies[companyId].name;
+
+      // Criar cópia atualizada das empresas
+      const updatedCompanies = { ...companies };
+      delete updatedCompanies[companyId];
+      
+      // Atualizar estado
+      setCompanies(updatedCompanies);
+      mockCompanies = updatedCompanies;
+
+      // Persistir no localStorage
+      saveCompaniesToStorage(updatedCompanies);
+      
+      // Limpar configurações relacionadas
+      delete mockCompanyCheckupSettings[companyId];
+      delete mockCompanyRecommendations[companyId];
+
+      return { success: true, message: `Empresa "${companyName}" excluída com sucesso!` };
+
+    } catch (error) {
+      console.error('Erro ao excluir empresa:', error);
+      return { success: false, message: 'Erro ao excluir empresa. Tente novamente.' };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [companies]);
+
+  // Registrar usuário
   const registerUser = useCallback(async (userData: {
     name: string;
     email: string;
@@ -547,569 +444,113 @@ export const useAuth = () => {
     companyId: string;
   }): Promise<{ success: boolean; message: string; user?: User }> => {
     try {
-      // Verificar se a empresa existe (se não for super_admin)
-      if (userData.role !== 'super_admin' && userData.companyId) {
-        const { data: company, error: companyError } = await supabase
-          .from('companies')
-          .select('id')
-          .eq('id', userData.companyId)
-          .single();
-          
-        if (companyError) {
-          return {
-            success: false,
-            message: 'Empresa não encontrada.'
-          };
-        }
-      }
-      
-      // Primeiro, criar o usuário na autenticação do Supabase
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: userData.email,
-        password: userData.password,
-        options: {
-          data: {
-            name: userData.name,
-            role: userData.role
-          }
-        }
-      });
-      
-      if (authError) {
-        console.error('Erro ao criar usuário na autenticação:', authError.message);
-        return {
-          success: false,
-          message: 'Erro ao criar usuário: ' + authError.message
-        };
-      }
-      
-      if (!authData.user) {
-        return {
-          success: false,
-          message: 'Falha ao criar usuário. Tente novamente.'
-        };
-      }
-      
-      // Depois, criar o registro do usuário na tabela users
-      const { data: newUser, error: userError } = await supabase
-        .from('users')
-        .insert([{
-          id: authData.user.id,
-          name: userData.name,
-          email: userData.email.toLowerCase(),
-          role: userData.role,
-          company_id: userData.role === 'super_admin' ? null : userData.companyId,
-          department: userData.role === 'super_admin' ? null : userData.department,
-          is_active: true
-        }])
-        .select()
-        .single();
-        
-      if (userError) {
-        console.error('Erro ao criar registro de usuário:', userError.message);
-        
-        // Tentar excluir o usuário da autenticação para evitar inconsistências
-        try {
-          await supabase.auth.admin.deleteUser(authData.user.id);
-        } catch (e) {
-          console.error('Erro ao excluir usuário da autenticação após falha:', e);
-        }
-        
-        return {
-          success: false,
-          message: 'Erro ao criar registro de usuário: ' + userError.message
-        };
-      }
-      
-      // Se não for super_admin, incrementar o contador de usuários da empresa
-      if (userData.role !== 'super_admin' && userData.companyId) {
-        await supabase.rpc('increment_company_users', { 
-          company_id: userData.companyId 
-        });
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const mappedUser: User = {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        role: newUser.role,
-        companyId: newUser.company_id,
-        department: newUser.department,
-        avatar: newUser.avatar_url,
-        isActive: newUser.is_active,
-        createdAt: new Date(newUser.created_at),
-        updatedAt: new Date(newUser.updated_at),
-        permissions: getPermissionsByRole(newUser.role)
-      };
-      
-      return {
-        success: true,
-        message: 'Usuário registrado com sucesso!',
-        user: mappedUser
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao registrar usuário:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao registrar o usuário. Tente novamente.'
-      };
-    }
-  }, []);
+      setIsLoading(true);
 
-  // Função para salvar resultado de checkup
+      // Em uma aplicação real, criaria o usuário no Supabase Auth
+      // const { data, error } = await supabase.auth.signUp({email, password, ...});
+
+      // Validações
+      if (!userData.name || !userData.email || !userData.password) {
+        return { success: false, message: 'Todos os campos obrigatórios devem ser preenchidos' };
+      }
+
+      if (!validateEmail(userData.email)) {
+        return { success: false, message: 'Email inválido' };
+      }
+
+      const passwordValidation = validatePassword(userData.password);
+      if (!passwordValidation.valid) {
+        return { success: false, message: passwordValidation.message || 'Senha inválida' };
+      }
+
+      // Verificar se email já existe
+      if (Object.values(mockUsers).some(u => u.email.toLowerCase() === userData.email.toLowerCase())) {
+        return { success: false, message: 'Email já está em uso' };
+      }
+
+      // Verificar se a empresa existe
+      if (!companies[userData.companyId]) {
+        return { success: false, message: 'Empresa não encontrada' };
+      }
+
+      // Criar novo usuário
+      const newUser: User = {
+        id: `user_${Date.now()}`,
+        name: userData.name,
+        email: userData.email,
+        role: userData.role,
+        companyId: userData.companyId,
+        department: userData.department,
+        avatar: 'https://images.pexels.com/photos/3768911/pexels-photo-3768911.jpeg?auto=compress&cs=tinysrgb&w=400',
+        permissions: [],
+        isActive: true,
+        createdAt: new Date()
+      };
+
+      // Atualizar mock
+      mockUsers[userData.email.toLowerCase()] = newUser;
+
+      // Salvar no localStorage
+      saveUserToStorage(newUser);
+
+      // Incrementar contador de usuários da empresa
+      const company = companies[userData.companyId];
+      if (company) {
+        const updatedCompany = { ...company, currentUsers: company.currentUsers + 1 };
+        const updatedCompanies = { ...companies, [userData.companyId]: updatedCompany };
+        
+        setCompanies(updatedCompanies);
+        mockCompanies = updatedCompanies;
+        
+        saveCompaniesToStorage(updatedCompanies);
+      }
+
+      return { success: true, message: 'Usuário criado com sucesso!', user: newUser };
+    } catch (error) {
+      console.error('Erro ao registrar usuário:', error);
+      return { success: false, message: 'Erro ao registrar usuário. Tente novamente.' };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [companies]);
+
+  // Salvar resultado de checkup
   const saveCheckupResult = useCallback(async (checkupResult: CheckupResult): Promise<boolean> => {
     try {
       if (!user) return false;
       
-      // Mapear resultado para o formato do banco
-      const mappedResult = {
-        user_id: checkupResult.userId,
-        company_id: checkupResult.companyId,
-        responses: checkupResult.responses,
-        scores: checkupResult.scores,
-        classifications: checkupResult.classifications,
-        overall_score: checkupResult.overallScore,
-        severity_level: checkupResult.severityLevel,
-        next_checkup_date: checkupResult.nextCheckupDate,
-        // Dados do IAS
-        ias_responses: checkupResult.iasResponses,
-        ias_total_score: checkupResult.iasTotalScore,
-        ias_classification: checkupResult.iasClassification,
-        // Dados combinados
-        combined_recommended_paths: checkupResult.combinedRecommendedPaths,
-        combined_psychologist_referral_needed: checkupResult.combinedPsychologistReferralNeeded,
-        combined_justification: checkupResult.combinedJustification,
-        combined_critical_level: checkupResult.combinedCriticalLevel,
-        combined_recommendations: checkupResult.combinedRecommendations
-      };
+      // Atualizar mock do usuário com os dados do checkup
+      const updatedUser = { ...user };
+      updatedUser.lastCheckup = checkupResult.date;
+      updatedUser.nextCheckup = checkupResult.nextCheckupDate;
       
-      // Inserir no banco de dados
-      const { error } = await supabase
-        .from('checkup_results')
-        .insert([mappedResult]);
-        
-      if (error) {
-        console.error('Erro ao salvar resultado de checkup:', error.message);
-        return false;
+      if (!updatedUser.checkupHistory) {
+        updatedUser.checkupHistory = [];
       }
       
-      // Recarregar dados do usuário para obter as novas datas de checkup
-      if (user) {
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', user.id)
-          .single();
-          
-        if (!userError && userData) {
-          // Converter datas
-          const updatedUser = { ...user };
-          
-          if (userData.last_checkup_date) {
-            updatedUser.lastCheckup = new Date(userData.last_checkup_date);
-          }
-          
-          if (userData.next_checkup_date) {
-            updatedUser.nextCheckup = new Date(userData.next_checkup_date);
-          }
-          
-          setUser(updatedUser);
-        }
-      }
+      updatedUser.checkupHistory.push(checkupResult);
+      
+      // Atualizar no mock
+      mockUsers[user.email] = updatedUser;
+      
+      // Atualizar localStorage
+      saveUserToStorage(updatedUser);
+      
+      // Atualizar estado
+      setUser(updatedUser);
       
       return true;
     } catch (error) {
-      console.error('Erro inesperado ao salvar resultado de checkup:', error);
+      console.error('Erro ao salvar resultado de checkup:', error);
       return false;
     }
   }, [user]);
 
-  // Função para obter configurações de checkup de uma empresa
-  const getCompanyCheckupSettings = useCallback(async (companyId: string): Promise<CompanyCheckupSettings | null> => {
-    try {
-      const { data, error } = await supabase
-        .from('company_checkup_settings')
-        .select('*')
-        .eq('company_id', companyId)
-        .single();
-        
-      if (error) {
-        console.error('Erro ao obter configurações de checkup:', error.message);
-        return null;
-      }
-      
-      if (!data) {
-        return null;
-      }
-      
-      // Mapear dados do banco para o formato do app
-      return {
-        id: data.id,
-        companyId: data.company_id,
-        normalIntervalDays: data.normal_interval_days,
-        severeIntervalDays: data.severe_interval_days,
-        autoRemindersEnabled: data.auto_reminders_enabled,
-        createdAt: new Date(data.created_at),
-        updatedAt: new Date(data.updated_at)
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao obter configurações de checkup:', error);
-      return null;
-    }
-  }, []);
+  // Gerenciamento de planos de assinatura
+  const getSubscriptionPlans = useCallback(() => {
+    return Object.values(subscriptionPlans);
+  }, [subscriptionPlans]);
 
-  // Função para salvar configurações de checkup de uma empresa
-  const saveCompanyCheckupSettings = useCallback(async (settings: Omit<CompanyCheckupSettings, 'id' | 'createdAt' | 'updatedAt'>): Promise<{ success: boolean; message: string }> => {
-    try {
-      const companyId = settings.companyId;
-      
-      // Verificar se a empresa existe
-      const { data: company, error: companyError } = await supabase
-        .from('companies')
-        .select('id')
-        .eq('id', companyId)
-        .single();
-        
-      if (companyError) {
-        return {
-          success: false,
-          message: 'Empresa não encontrada.'
-        };
-      }
-      
-      // Verificar se já existem configurações para a empresa
-      const { data: existingSettings, error: settingsError } = await supabase
-        .from('company_checkup_settings')
-        .select('id')
-        .eq('company_id', companyId)
-        .single();
-        
-      let result;
-      
-      if (!settingsError && existingSettings) {
-        // Atualizar configurações existentes
-        result = await supabase
-          .from('company_checkup_settings')
-          .update({
-            normal_interval_days: settings.normalIntervalDays,
-            severe_interval_days: settings.severeIntervalDays,
-            auto_reminders_enabled: settings.autoRemindersEnabled,
-            updated_at: new Date()
-          })
-          .eq('company_id', companyId);
-      } else {
-        // Criar novas configurações
-        result = await supabase
-          .from('company_checkup_settings')
-          .insert([{
-            company_id: companyId,
-            normal_interval_days: settings.normalIntervalDays,
-            severe_interval_days: settings.severeIntervalDays,
-            auto_reminders_enabled: settings.autoRemindersEnabled
-          }]);
-      }
-      
-      if (result.error) {
-        console.error('Erro ao salvar configurações de checkup:', result.error.message);
-        return {
-          success: false,
-          message: 'Erro ao salvar configurações de checkup: ' + result.error.message
-        };
-      }
-      
-      return {
-        success: true,
-        message: 'Configurações de checkup salvas com sucesso!'
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao salvar configurações de checkup:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao salvar as configurações. Tente novamente.'
-      };
-    }
-  }, []);
-
-  // Função para obter recomendações de uma empresa
-  const getCompanyRecommendations = useCallback(async (companyId: string): Promise<CompanyRecommendation[]> => {
-    try {
-      const { data, error } = await supabase
-        .from('company_recommendations')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('order_index', { ascending: true });
-        
-      if (error) {
-        console.error('Erro ao obter recomendações da empresa:', error.message);
-        return [];
-      }
-      
-      if (!data) {
-        return [];
-      }
-      
-      // Mapear dados do banco para o formato do app
-      return data.map(recommendation => ({
-        id: recommendation.id,
-        companyId: recommendation.company_id,
-        title: recommendation.title,
-        content: recommendation.content,
-        recommendationType: recommendation.recommendation_type,
-        orderIndex: recommendation.order_index,
-        createdAt: new Date(recommendation.created_at),
-        updatedAt: new Date(recommendation.updated_at)
-      }));
-    } catch (error) {
-      console.error('Erro inesperado ao obter recomendações da empresa:', error);
-      return [];
-    }
-  }, []);
-
-  // Função para salvar uma recomendação de empresa
-  const saveCompanyRecommendation = useCallback(async (recommendation: Omit<CompanyRecommendation, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): Promise<{ success: boolean; message: string; recommendation?: CompanyRecommendation }> => {
-    try {
-      const companyId = recommendation.companyId;
-      
-      // Verificar se a empresa existe
-      const { data: company, error: companyError } = await supabase
-        .from('companies')
-        .select('id')
-        .eq('id', companyId)
-        .single();
-        
-      if (companyError) {
-        return {
-          success: false,
-          message: 'Empresa não encontrada.'
-        };
-      }
-      
-      let result;
-      
-      if (recommendation.id) {
-        // Atualização
-        result = await supabase
-          .from('company_recommendations')
-          .update({
-            title: recommendation.title,
-            content: recommendation.content,
-            recommendation_type: recommendation.recommendationType,
-            order_index: recommendation.orderIndex,
-            updated_at: new Date()
-          })
-          .eq('id', recommendation.id)
-          .select()
-          .single();
-      } else {
-        // Criação
-        result = await supabase
-          .from('company_recommendations')
-          .insert([{
-            company_id: recommendation.companyId,
-            title: recommendation.title,
-            content: recommendation.content,
-            recommendation_type: recommendation.recommendationType,
-            order_index: recommendation.orderIndex
-          }])
-          .select()
-          .single();
-      }
-      
-      if (result.error) {
-        console.error('Erro ao salvar recomendação:', result.error.message);
-        return {
-          success: false,
-          message: 'Erro ao salvar recomendação: ' + result.error.message
-        };
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const savedRecommendation: CompanyRecommendation = {
-        id: result.data.id,
-        companyId: result.data.company_id,
-        title: result.data.title,
-        content: result.data.content,
-        recommendationType: result.data.recommendation_type,
-        orderIndex: result.data.order_index,
-        createdAt: new Date(result.data.created_at),
-        updatedAt: new Date(result.data.updated_at)
-      };
-      
-      return {
-        success: true,
-        message: recommendation.id ? 'Recomendação atualizada com sucesso!' : 'Recomendação criada com sucesso!',
-        recommendation: savedRecommendation
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao salvar recomendação:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao salvar a recomendação. Tente novamente.'
-      };
-    }
-  }, []);
-
-  // Função para excluir uma recomendação de empresa
-  const deleteCompanyRecommendation = useCallback(async (id: string, companyId: string): Promise<{ success: boolean; message: string }> => {
-    try {
-      // Verificar se a recomendação existe e pertence à empresa
-      const { data: recommendation, error: checkError } = await supabase
-        .from('company_recommendations')
-        .select('id')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .single();
-        
-      if (checkError) {
-        return {
-          success: false,
-          message: 'Recomendação não encontrada ou não pertence a esta empresa.'
-        };
-      }
-      
-      // Excluir a recomendação
-      const { error } = await supabase
-        .from('company_recommendations')
-        .delete()
-        .eq('id', id);
-        
-      if (error) {
-        console.error('Erro ao excluir recomendação:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao excluir recomendação: ' + error.message
-        };
-      }
-      
-      return {
-        success: true,
-        message: 'Recomendação excluída com sucesso!'
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao excluir recomendação:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao excluir a recomendação. Tente novamente.'
-      };
-    }
-  }, []);
-
-  // Função para atualizar perfil do usuário
-  const updateProfile = useCallback(async (profileData: UserProfileUpdate): Promise<{ success: boolean; message: string }> => {
-    try {
-      if (!user) {
-        return {
-          success: false,
-          message: 'Usuário não autenticado.'
-        };
-      }
-      
-      // Preparar dados para atualização
-      const updateData: any = {
-        name: profileData.name,
-        updated_at: new Date()
-      };
-      
-      if (profileData.birthDate) {
-        updateData.birth_date = profileData.birthDate;
-      }
-      
-      if (profileData.gender) {
-        updateData.gender = profileData.gender;
-      }
-      
-      // Atualizar dados do perfil
-      const { error } = await supabase
-        .from('users')
-        .update(updateData)
-        .eq('id', user.id);
-        
-      if (error) {
-        console.error('Erro ao atualizar perfil:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao atualizar perfil: ' + error.message
-        };
-      }
-      
-      // Se estiver alterando a senha
-      if (profileData.currentPassword && profileData.newPassword && profileData.confirmPassword) {
-        // Verificar se as senhas coincidem
-        if (profileData.newPassword !== profileData.confirmPassword) {
-          return {
-            success: false,
-            message: 'A confirmação de senha não coincide.'
-          };
-        }
-        
-        const { error: passwordError } = await supabase.auth.updateUser({
-          password: profileData.newPassword
-        });
-        
-        if (passwordError) {
-          console.error('Erro ao atualizar senha:', passwordError.message);
-          return {
-            success: false,
-            message: 'Erro ao atualizar senha: ' + passwordError.message
-          };
-        }
-      }
-      
-      // Atualizar usuário no state
-      const updatedUser = { ...user, name: profileData.name };
-      if (profileData.birthDate) updatedUser.birthDate = profileData.birthDate;
-      if (profileData.gender) updatedUser.gender = profileData.gender;
-      setUser(updatedUser);
-      
-      return {
-        success: true,
-        message: 'Perfil atualizado com sucesso!'
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao atualizar perfil:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao atualizar o perfil. Tente novamente.'
-      };
-    }
-  }, [user]);
-
-  // Função para obter planos de assinatura
-  const getSubscriptionPlans = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from('subscription_plans')
-        .select('*')
-        .order('value', { ascending: true });
-        
-      if (error) {
-        console.error('Erro ao obter planos de assinatura:', error.message);
-        return [];
-      }
-      
-      if (!data) {
-        return [];
-      }
-      
-      // Mapear dados do banco para o formato do app
-      return data.map(plan => ({
-        id: plan.id,
-        name: plan.name,
-        value: plan.value,
-        periodicity: plan.periodicity,
-        features: plan.features,
-        description: plan.description,
-        isActive: plan.is_active,
-        createdAt: new Date(plan.created_at)
-      }));
-    } catch (error) {
-      console.error('Erro inesperado ao obter planos de assinatura:', error);
-      return [];
-    }
-  }, []);
-
-  // Função para adicionar plano de assinatura
   const addSubscriptionPlan = useCallback(async (planData: {
     name: string;
     value: number;
@@ -1118,55 +559,41 @@ export const useAuth = () => {
     description?: string;
   }): Promise<{ success: boolean; message: string; plan?: SubscriptionPlan }> => {
     try {
-      // Inserir plano no banco
-      const { data, error } = await supabase
-        .from('subscription_plans')
-        .insert([{
-          name: planData.name,
-          value: planData.value,
-          periodicity: planData.periodicity,
-          features: planData.features,
-          description: planData.description,
-          is_active: true
-        }])
-        .select()
-        .single();
-        
-      if (error) {
-        console.error('Erro ao adicionar plano de assinatura:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao adicionar plano: ' + error.message
-        };
+      // Validações
+      if (!planData.name || planData.value <= 0) {
+        return { success: false, message: 'Nome e valor são obrigatórios' };
       }
-      
-      // Mapear dados do banco para o formato do app
-      const newPlan: SubscriptionPlan = {
-        id: data.id,
-        name: data.name,
-        value: data.value,
-        periodicity: data.periodicity,
-        features: data.features,
-        description: data.description,
-        isActive: data.is_active,
-        createdAt: new Date(data.created_at)
-      };
-      
-      return {
-        success: true,
-        message: 'Plano de assinatura criado com sucesso!',
-        plan: newPlan
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao adicionar plano de assinatura:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao adicionar o plano. Tente novamente.'
-      };
-    }
-  }, []);
 
-  // Função para atualizar plano de assinatura
+      // Criar novo plano
+      const newPlan: SubscriptionPlan = {
+        id: `plan_${Date.now()}`,
+        name: planData.name,
+        value: planData.value,
+        periodicity: planData.periodicity,
+        features: planData.features || [],
+        isActive: true,
+        createdAt: new Date(),
+        description: planData.description
+      };
+
+      // Atualizar mock
+      const updatedPlans = {
+        ...subscriptionPlans,
+        [newPlan.id]: newPlan
+      };
+      
+      mockSubscriptionPlans = updatedPlans;
+      setSubscriptionPlans(updatedPlans);
+      
+      // Persistir no localStorage
+      saveSubscriptionPlansToStorage(updatedPlans);
+
+      return { success: true, message: 'Plano criado com sucesso!', plan: newPlan };
+    } catch (error) {
+      return { success: false, message: 'Erro ao adicionar plano' };
+    }
+  }, [subscriptionPlans]);
+
   const updateSubscriptionPlan = useCallback(async (planId: string, planData: {
     name: string;
     value: number;
@@ -1175,618 +602,497 @@ export const useAuth = () => {
     description?: string;
   }): Promise<{ success: boolean; message: string; plan?: SubscriptionPlan }> => {
     try {
-      // Atualizar plano no banco
-      const { data, error } = await supabase
-        .from('subscription_plans')
-        .update({
-          name: planData.name,
-          value: planData.value,
-          periodicity: planData.periodicity,
-          features: planData.features,
-          description: planData.description
-        })
-        .eq('id', planId)
-        .select()
-        .single();
-        
-      if (error) {
-        console.error('Erro ao atualizar plano de assinatura:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao atualizar plano: ' + error.message
-        };
+      // Verificar se o plano existe
+      if (!subscriptionPlans[planId]) {
+        return { success: false, message: 'Plano não encontrado' };
       }
-      
-      // Mapear dados do banco para o formato do app
-      const updatedPlan: SubscriptionPlan = {
-        id: data.id,
-        name: data.name,
-        value: data.value,
-        periodicity: data.periodicity,
-        features: data.features,
-        description: data.description,
-        isActive: data.is_active,
-        createdAt: new Date(data.created_at)
-      };
-      
-      return {
-        success: true,
-        message: 'Plano de assinatura atualizado com sucesso!',
-        plan: updatedPlan
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao atualizar plano de assinatura:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao atualizar o plano. Tente novamente.'
-      };
-    }
-  }, []);
 
-  // Função para alternar status do plano de assinatura
+      // Atualizar plano
+      const updatedPlan = {
+        ...subscriptionPlans[planId],
+        name: planData.name,
+        value: planData.value,
+        periodicity: planData.periodicity,
+        features: planData.features,
+        description: planData.description,
+        updatedAt: new Date()
+      };
+
+      // Atualizar mock
+      const updatedPlans = {
+        ...subscriptionPlans,
+        [planId]: updatedPlan
+      };
+      
+      mockSubscriptionPlans = updatedPlans;
+      setSubscriptionPlans(updatedPlans);
+      
+      // Persistir no localStorage
+      saveSubscriptionPlansToStorage(updatedPlans);
+
+      return { success: true, message: 'Plano atualizado com sucesso!', plan: updatedPlan };
+    } catch (error) {
+      return { success: false, message: 'Erro ao atualizar plano' };
+    }
+  }, [subscriptionPlans]);
+
   const togglePlanStatus = useCallback(async (planId: string): Promise<{ success: boolean; message: string; plan?: SubscriptionPlan }> => {
     try {
-      // Primeiro, obter o status atual do plano
-      const { data: currentPlan, error: fetchError } = await supabase
-        .from('subscription_plans')
-        .select('is_active')
-        .eq('id', planId)
-        .single();
-        
-      if (fetchError) {
-        console.error('Erro ao obter plano de assinatura:', fetchError.message);
-        return {
-          success: false,
-          message: 'Plano de assinatura não encontrado.'
-        };
+      // Verificar se o plano existe
+      if (!subscriptionPlans[planId]) {
+        return { success: false, message: 'Plano não encontrado' };
       }
-      
-      // Alternar o status
-      const newStatus = !currentPlan.is_active;
-      
-      // Atualizar status no banco
-      const { data, error } = await supabase
-        .from('subscription_plans')
-        .update({
-          is_active: newStatus
-        })
-        .eq('id', planId)
-        .select()
-        .single();
-        
-      if (error) {
-        console.error('Erro ao alternar status do plano:', error.message);
-        return {
-          success: false,
-          message: 'Erro ao alternar status do plano: ' + error.message
-        };
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const updatedPlan: SubscriptionPlan = {
-        id: data.id,
-        name: data.name,
-        value: data.value,
-        periodicity: data.periodicity,
-        features: data.features,
-        description: data.description,
-        isActive: data.is_active,
-        createdAt: new Date(data.created_at)
-      };
-      
-      return {
-        success: true,
-        message: `Plano de assinatura ${newStatus ? 'ativado' : 'desativado'} com sucesso!`,
-        plan: updatedPlan
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao alternar status do plano:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao alternar o status do plano. Tente novamente.'
-      };
-    }
-  }, []);
 
-  // Função para criar usuário
-  const createUser = useCallback(async (userData: {
-    name: string;
-    email: string;
-    password: string;
-    role: User['role'];
-    department?: string;
-    companyId?: string;
-  }) => {
-    try {
-      // Verificar se a empresa existe (se não for super_admin)
-      if (userData.role !== 'super_admin' && userData.companyId) {
-        const { data: company, error: companyError } = await supabase
-          .from('companies')
-          .select('id')
-          .eq('id', userData.companyId)
-          .single();
-          
-        if (companyError) {
-          return {
-            success: false,
-            message: 'Empresa não encontrada.'
-          };
-        }
-      }
-      
-      // Primeiro, criar o usuário na autenticação do Supabase
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: userData.email,
-        password: userData.password,
-        user_metadata: {
-          name: userData.name,
-          role: userData.role
-        },
-        email_confirm: true // Auto-confirmar email para fins de demo
-      });
-      
-      if (authError) {
-        console.error('Erro ao criar usuário na autenticação:', authError.message);
-        return {
-          success: false,
-          message: 'Erro ao criar usuário: ' + authError.message
-        };
-      }
-      
-      if (!authData.user) {
-        return {
-          success: false,
-          message: 'Falha ao criar usuário. Tente novamente.'
-        };
-      }
-      
-      // Depois, criar o registro do usuário na tabela users
-      const { data: newUser, error: userError } = await supabase
-        .from('users')
-        .insert([{
-          id: authData.user.id,
-          name: userData.name,
-          email: userData.email.toLowerCase(),
-          role: userData.role,
-          company_id: userData.role === 'super_admin' ? null : userData.companyId,
-          department: userData.role === 'super_admin' ? null : userData.department,
-          is_active: true
-        }])
-        .select()
-        .single();
-        
-      if (userError) {
-        console.error('Erro ao criar registro de usuário:', userError.message);
-        
-        // Tentar excluir o usuário da autenticação para evitar inconsistências
-        try {
-          await supabase.auth.admin.deleteUser(authData.user.id);
-        } catch (e) {
-          console.error('Erro ao excluir usuário da autenticação após falha:', e);
-        }
-        
-        return {
-          success: false,
-          message: 'Erro ao criar registro de usuário: ' + userError.message
-        };
-      }
-      
-      // Se não for super_admin, incrementar o contador de usuários da empresa
-      if (userData.role !== 'super_admin' && userData.companyId) {
-        await supabase.rpc('increment_company_users', { 
-          company_id: userData.companyId 
-        });
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const mappedUser: User = {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        role: newUser.role,
-        companyId: newUser.company_id,
-        department: newUser.department,
-        avatar: newUser.avatar_url,
-        isActive: newUser.is_active,
-        createdAt: new Date(newUser.created_at),
-        updatedAt: new Date(newUser.updated_at),
-        permissions: getPermissionsByRole(newUser.role)
-      };
-      
-      return {
-        success: true,
-        message: 'Usuário criado com sucesso!',
-        user: mappedUser
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao criar usuário:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao criar o usuário. Tente novamente.'
-      };
-    }
-  }, []);
-
-  // Função para atualizar usuário
-  const updateUser = useCallback(async (userId: string, userData: {
-    name: string;
-    email: string;
-    role: User['role'];
-    department?: string;
-    companyId?: string;
-    password?: string;
-  }) => {
-    try {
-      // Não permitir atualizar o próprio usuário
-      if (user && user.id === userId) {
-        return {
-          success: false,
-          message: 'Você não pode atualizar seu próprio usuário por esta interface.'
-        };
-      }
-      
-      // Verificar se o usuário existe
-      const { data: existingUser, error: userError } = await supabase
-        .from('users')
-        .select('id, role, company_id, email')
-        .eq('id', userId)
-        .single();
-        
-      if (userError) {
-        console.error('Erro ao buscar usuário:', userError.message);
-        return {
-          success: false,
-          message: 'Usuário não encontrado.'
-        };
-      }
-      
-      // Verificar permissão para atualizar super_admin
-      if (existingUser.role === 'super_admin' && user?.role !== 'super_admin') {
-        return {
-          success: false,
-          message: 'Você não tem permissão para atualizar um Super Administrador.'
-        };
-      }
-      
-      // Se o email foi alterado, verificar se já está em uso
-      if (existingUser.email !== userData.email.toLowerCase()) {
-        const { data: emailCheck, error: emailError } = await supabase
-          .from('users')
-          .select('id')
-          .eq('email', userData.email.toLowerCase())
-          .neq('id', userId)
-          .single();
-          
-        if (emailCheck) {
-          return {
-            success: false,
-            message: 'Este email já está em uso por outro usuário.'
-          };
-        }
-      }
-      
-      // Verificar se a empresa existe (se não for super_admin)
-      if (userData.role !== 'super_admin' && userData.companyId) {
-        const { data: company, error: companyError } = await supabase
-          .from('companies')
-          .select('id')
-          .eq('id', userData.companyId)
-          .single();
-          
-        if (companyError) {
-          return {
-            success: false,
-            message: 'Empresa não encontrada.'
-          };
-        }
-      }
-      
-      // Preparar dados para atualização
-      const updateData: any = {
-        name: userData.name,
-        email: userData.email.toLowerCase(),
-        role: userData.role,
-        company_id: userData.role === 'super_admin' ? null : userData.companyId,
-        department: userData.role === 'super_admin' ? null : userData.department,
-        updated_at: new Date()
-      };
-      
-      // Atualizar usuário no banco
-      const { data: updatedUser, error: updateError } = await supabase
-        .from('users')
-        .update(updateData)
-        .eq('id', userId)
-        .select()
-        .single();
-        
-      if (updateError) {
-        console.error('Erro ao atualizar usuário:', updateError.message);
-        return {
-          success: false,
-          message: 'Erro ao atualizar usuário: ' + updateError.message
-        };
-      }
-      
-      // Se mudou de empresa, atualizar contadores
-      if (existingUser.company_id !== updateData.company_id) {
-        // Decrementar contador da empresa antiga
-        if (existingUser.company_id) {
-          await supabase.rpc('decrement_company_users', { 
-            company_id: existingUser.company_id 
-          });
-        }
-        
-        // Incrementar contador da nova empresa
-        if (updateData.company_id) {
-          await supabase.rpc('increment_company_users', { 
-            company_id: updateData.company_id 
-          });
-        }
-      }
-      
-      // Se a senha foi fornecida, atualizá-la
-      if (userData.password) {
-        const { error: passwordError } = await supabase.auth.admin.updateUserById(
-          userId,
-          { password: userData.password }
-        );
-        
-        if (passwordError) {
-          console.error('Erro ao atualizar senha:', passwordError.message);
-          return {
-            success: false,
-            message: 'Usuário atualizado, mas ocorreu um erro ao atualizar a senha: ' + passwordError.message
-          };
-        }
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const mappedUser: User = {
-        id: updatedUser.id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        role: updatedUser.role,
-        companyId: updatedUser.company_id,
-        department: updatedUser.department,
-        avatar: updatedUser.avatar_url,
-        isActive: updatedUser.is_active,
-        createdAt: new Date(updatedUser.created_at),
-        updatedAt: new Date(updatedUser.updated_at),
-        permissions: getPermissionsByRole(updatedUser.role)
-      };
-      
-      return {
-        success: true,
-        message: 'Usuário atualizado com sucesso!',
-        user: mappedUser
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao atualizar usuário:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao atualizar o usuário. Tente novamente.'
-      };
-    }
-  }, [user]);
-
-  // Função para alternar status do usuário (ativo/inativo)
-  const toggleUserStatus = useCallback(async (userId: string) => {
-    try {
-      // Não permitir alternar o próprio status
-      if (user && user.id === userId) {
-        return {
-          success: false,
-          message: 'Você não pode alterar seu próprio status.'
-        };
-      }
-      
-      // Verificar se o usuário existe
-      const { data: existingUser, error: userError } = await supabase
-        .from('users')
-        .select('id, role, is_active')
-        .eq('id', userId)
-        .single();
-        
-      if (userError) {
-        console.error('Erro ao buscar usuário:', userError.message);
-        return {
-          success: false,
-          message: 'Usuário não encontrado.'
-        };
-      }
-      
-      // Verificar permissão para alterar super_admin
-      if (existingUser.role === 'super_admin' && user?.role !== 'super_admin') {
-        return {
-          success: false,
-          message: 'Você não tem permissão para alterar o status de um Super Administrador.'
-        };
-      }
+      const plan = subscriptionPlans[planId];
       
       // Alternar status
-      const newStatus = !existingUser.is_active;
+      const updatedPlan = {
+        ...plan,
+        isActive: !plan.isActive,
+        updatedAt: new Date()
+      };
+
+      // Atualizar mock
+      const updatedPlans = {
+        ...subscriptionPlans,
+        [planId]: updatedPlan
+      };
       
-      const { data: updatedUser, error: updateError } = await supabase
-        .from('users')
-        .update({
-          is_active: newStatus,
-          updated_at: new Date()
-        })
-        .eq('id', userId)
-        .select()
-        .single();
-        
-      if (updateError) {
-        console.error('Erro ao alternar status do usuário:', updateError.message);
-        return {
-          success: false,
-          message: 'Erro ao alternar status do usuário: ' + updateError.message
-        };
+      mockSubscriptionPlans = updatedPlans;
+      setSubscriptionPlans(updatedPlans);
+      
+      // Persistir no localStorage
+      saveSubscriptionPlansToStorage(updatedPlans);
+
+      const statusMessage = updatedPlan.isActive ? 'ativado' : 'desativado';
+      return { 
+        success: true, 
+        message: `Plano ${updatedPlan.name} ${statusMessage} com sucesso!`, 
+        plan: updatedPlan 
+      };
+    } catch (error) {
+      return { success: false, message: 'Erro ao alterar status do plano' };
+    }
+  }, [subscriptionPlans]);
+
+  // Gerenciamento de configurações de checkup
+  const getCompanyCheckupSettings = useCallback(async (companyId: string): Promise<CompanyCheckupSettings | null> => {
+    // Verificar se a empresa existe
+    if (!companies[companyId]) {
+      return null;
+    }
+
+    // Retornar configurações ou criar padrão
+    if (mockCompanyCheckupSettings[companyId]) {
+      return mockCompanyCheckupSettings[companyId];
+    }
+
+    // Criar configurações padrão
+    const defaultSettings: CompanyCheckupSettings = {
+      id: `settings_${Date.now()}`,
+      companyId,
+      normalIntervalDays: 90,
+      severeIntervalDays: 30,
+      autoRemindersEnabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    mockCompanyCheckupSettings[companyId] = defaultSettings;
+    return defaultSettings;
+  }, [companies]);
+
+  const saveCompanyCheckupSettings = useCallback(async (settings: Omit<CompanyCheckupSettings, 'id' | 'createdAt' | 'updatedAt'>): Promise<{ success: boolean; message: string }> => {
+    try {
+      // Verificar se a empresa existe
+      if (!companies[settings.companyId]) {
+        return { success: false, message: 'Empresa não encontrada' };
       }
+
+      // Validações
+      if (settings.normalIntervalDays < 1 || settings.normalIntervalDays > 365) {
+        return { success: false, message: 'Intervalo normal deve estar entre 1 e 365 dias' };
+      }
+
+      if (settings.severeIntervalDays < 1 || settings.severeIntervalDays > 90) {
+        return { success: false, message: 'Intervalo para casos severos deve estar entre 1 e 90 dias' };
+      }
+
+      if (settings.severeIntervalDays >= settings.normalIntervalDays) {
+        return { success: false, message: 'Intervalo para casos severos deve ser menor que o intervalo normal' };
+      }
+
+      // Atualizar ou criar configurações
+      const existingSettings = mockCompanyCheckupSettings[settings.companyId];
       
-      // Desativar usuário na autenticação, se necessário
-      if (!newStatus) {
-        await supabase.auth.admin.updateUserById(
-          userId,
-          { ban_duration: '87600h' } // ~10 anos (valor alto para "ban permanente")
-        );
+      const updatedSettings: CompanyCheckupSettings = {
+        id: existingSettings?.id || `settings_${Date.now()}`,
+        companyId: settings.companyId,
+        normalIntervalDays: settings.normalIntervalDays,
+        severeIntervalDays: settings.severeIntervalDays,
+        autoRemindersEnabled: settings.autoRemindersEnabled,
+        createdAt: existingSettings?.createdAt || new Date(),
+        updatedAt: new Date()
+      };
+
+      mockCompanyCheckupSettings[settings.companyId] = updatedSettings;
+
+      return { success: true, message: 'Configurações salvas com sucesso!' };
+    } catch (error) {
+      return { success: false, message: 'Erro ao salvar configurações' };
+    }
+  }, [companies]);
+
+  // Gerenciamento de recomendações da empresa
+  const getCompanyRecommendations = useCallback(async (companyId: string): Promise<CompanyRecommendation[]> => {
+    // Verificar se a empresa existe
+    if (!companies[companyId]) {
+      return [];
+    }
+
+    // Retornar recomendações ou criar padrão
+    if (mockCompanyRecommendations[companyId]) {
+      return mockCompanyRecommendations[companyId];
+    }
+
+    // Criar recomendações padrão
+    const defaultRecommendations: CompanyRecommendation[] = [
+      {
+        id: `rec1_${Date.now()}`,
+        companyId,
+        title: 'Cuidando da Saúde Mental',
+        content: 'Pratique técnicas de respiração diariamente para reduzir o estresse. Reserve momentos para atividades prazerosas e desconexão digital. Considere a meditação como parte da sua rotina.',
+        recommendationType: 'mental_health',
+        orderIndex: 1,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      },
+      {
+        id: `rec2_${Date.now()}`,
+        companyId,
+        title: 'Alimentação Saudável',
+        content: 'Mantenha uma dieta equilibrada com frutas, vegetais e proteínas magras. Hidrate-se adequadamente bebendo pelo menos 2 litros de água por dia. Evite alimentos ultraprocessados e excesso de açúcar.',
+        recommendationType: 'nutrition',
+        orderIndex: 2,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ];
+
+    mockCompanyRecommendations[companyId] = defaultRecommendations;
+    return defaultRecommendations;
+  }, [companies]);
+
+  const saveCompanyRecommendation = useCallback(async (recommendation: Omit<CompanyRecommendation, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): Promise<{ success: boolean; message: string; recommendation?: CompanyRecommendation }> => {
+    try {
+      // Verificar se a empresa existe
+      if (!companies[recommendation.companyId]) {
+        return { success: false, message: 'Empresa não encontrada' };
+      }
+
+      // Validações
+      if (!recommendation.title.trim() || !recommendation.content.trim()) {
+        return { success: false, message: 'Título e conteúdo são obrigatórios' };
+      }
+
+      // Inicializar array de recomendações se não existir
+      if (!mockCompanyRecommendations[recommendation.companyId]) {
+        mockCompanyRecommendations[recommendation.companyId] = [];
+      }
+
+      // Se tem ID, é atualização; senão, é criação
+      if (recommendation.id) {
+        // Encontrar recomendação existente
+        const index = mockCompanyRecommendations[recommendation.companyId]
+          .findIndex(r => r.id === recommendation.id);
+        
+        if (index === -1) {
+          return { success: false, message: 'Recomendação não encontrada' };
+        }
+
+        // Atualizar recomendação existente
+        const updatedRecommendation: CompanyRecommendation = {
+          ...mockCompanyRecommendations[recommendation.companyId][index],
+          title: recommendation.title,
+          content: recommendation.content,
+          recommendationType: recommendation.recommendationType,
+          orderIndex: recommendation.orderIndex,
+          updatedAt: new Date()
+        };
+
+        mockCompanyRecommendations[recommendation.companyId][index] = updatedRecommendation;
+
+        return { 
+          success: true, 
+          message: 'Recomendação atualizada com sucesso!', 
+          recommendation: updatedRecommendation 
+        };
       } else {
-        // Reativar usuário na autenticação
-        await supabase.auth.admin.updateUserById(
-          userId,
-          { ban_duration: null }
-        );
-      }
-      
-      // Mapear dados do banco para o formato do app
-      const mappedUser: User = {
-        id: updatedUser.id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        role: updatedUser.role,
-        companyId: updatedUser.company_id,
-        department: updatedUser.department,
-        avatar: updatedUser.avatar_url,
-        isActive: updatedUser.is_active,
-        createdAt: new Date(updatedUser.created_at),
-        updatedAt: new Date(updatedUser.updated_at),
-        permissions: getPermissionsByRole(updatedUser.role)
-      };
-      
-      return {
-        success: true,
-        message: `Usuário ${newStatus ? 'ativado' : 'desativado'} com sucesso!`,
-        user: mappedUser
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao alternar status do usuário:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao alternar o status do usuário. Tente novamente.'
-      };
-    }
-  }, [user]);
+        // Criar nova recomendação
+        const newRecommendation: CompanyRecommendation = {
+          id: `rec_${Date.now()}`,
+          companyId: recommendation.companyId,
+          title: recommendation.title,
+          content: recommendation.content,
+          recommendationType: recommendation.recommendationType,
+          orderIndex: recommendation.orderIndex,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
 
-  // Função para excluir usuário
-  const deleteUser = useCallback(async (userId: string) => {
-    try {
-      // Não permitir excluir o próprio usuário
-      if (user && user.id === userId) {
-        return {
-          success: false,
-          message: 'Você não pode excluir seu próprio usuário.'
-        };
-      }
-      
-      // Verificar se o usuário existe
-      const { data: existingUser, error: userError } = await supabase
-        .from('users')
-        .select('id, role, company_id')
-        .eq('id', userId)
-        .single();
-        
-      if (userError) {
-        console.error('Erro ao buscar usuário:', userError.message);
-        return {
-          success: false,
-          message: 'Usuário não encontrado.'
-        };
-      }
-      
-      // Verificar permissão para excluir super_admin
-      if (existingUser.role === 'super_admin' && user?.role !== 'super_admin') {
-        return {
-          success: false,
-          message: 'Você não tem permissão para excluir um Super Administrador.'
-        };
-      }
-      
-      // Decrementar contador da empresa, se aplicável
-      if (existingUser.company_id) {
-        await supabase.rpc('decrement_company_users', { 
-          company_id: existingUser.company_id 
-        });
-      }
-      
-      // Excluir usuário da tabela users
-      const { error: deleteError } = await supabase
-        .from('users')
-        .delete()
-        .eq('id', userId);
-        
-      if (deleteError) {
-        console.error('Erro ao excluir usuário da tabela:', deleteError.message);
-        return {
-          success: false,
-          message: 'Erro ao excluir usuário: ' + deleteError.message
-        };
-      }
-      
-      // Excluir usuário da autenticação
-      const { error: authDeleteError } = await supabase.auth.admin.deleteUser(userId);
-      
-      if (authDeleteError) {
-        console.error('Erro ao excluir usuário da autenticação:', authDeleteError.message);
-        // Não retornamos erro aqui pois o usuário já foi excluído da tabela
-      }
-      
-      return {
-        success: true,
-        message: 'Usuário excluído com sucesso!'
-      };
-    } catch (error) {
-      console.error('Erro inesperado ao excluir usuário:', error);
-      return {
-        success: false,
-        message: 'Ocorreu um erro ao excluir o usuário. Tente novamente.'
-      };
-    }
-  }, [user]);
+        mockCompanyRecommendations[recommendation.companyId].push(newRecommendation);
 
-  // Função para obter todos os usuários
-  const getAllUsers = useCallback(async () => {
+        return { 
+          success: true, 
+          message: 'Recomendação criada com sucesso!', 
+          recommendation: newRecommendation 
+        };
+      }
+    } catch (error) {
+      return { success: false, message: 'Erro ao salvar recomendação' };
+    }
+  }, [companies]);
+
+  const deleteCompanyRecommendation = useCallback(async (id: string, companyId: string): Promise<{ success: boolean; message: string }> => {
     try {
-      let query = supabase.from('users').select('*');
-      
-      // Se não for super_admin, filtrar apenas usuários da mesma empresa
-      if (user && user.role !== 'super_admin' && user.companyId) {
-        query = query.eq('company_id', user.companyId);
+      // Verificar se a empresa existe
+      if (!companies[companyId]) {
+        return { success: false, message: 'Empresa não encontrada' };
       }
-      
-      const { data, error } = await query;
-      
-      if (error) {
-        console.error('Erro ao buscar usuários:', error.message);
-        return [];
+
+      // Verificar se há recomendações para a empresa
+      if (!mockCompanyRecommendations[companyId]) {
+        return { success: false, message: 'Nenhuma recomendação encontrada para esta empresa' };
       }
+
+      // Encontrar recomendação
+      const index = mockCompanyRecommendations[companyId].findIndex(r => r.id === id);
       
-      if (!data) {
-        return [];
+      if (index === -1) {
+        return { success: false, message: 'Recomendação não encontrada' };
       }
-      
-      // Mapear dados do banco para o formato do app
-      return data.map(userData => ({
-        id: userData.id,
+
+      // Remover recomendação
+      mockCompanyRecommendations[companyId].splice(index, 1);
+
+      return { success: true, message: 'Recomendação excluída com sucesso!' };
+    } catch (error) {
+      return { success: false, message: 'Erro ao excluir recomendação' };
+    }
+  }, [companies]);
+
+  // Funções de gerenciamento de usuários
+  const createUser = useCallback(async (userData: any): Promise<any> => {
+    try {
+      // Validações básicas
+      if (!userData.name || !userData.email || !userData.role) {
+        return { success: false, message: 'Dados incompletos' };
+      }
+
+      // Verificar se email já existe
+      if (Object.values(mockUsers).some(u => u.email.toLowerCase() === userData.email.toLowerCase())) {
+        return { success: false, message: 'Email já está em uso' };
+      }
+
+      // Criar novo usuário
+      const newUser: User = {
+        id: `user_${Date.now()}`,
         name: userData.name,
         email: userData.email,
         role: userData.role,
-        companyId: userData.company_id,
+        companyId: userData.companyId,
         department: userData.department,
-        avatar: userData.avatar_url,
-        lastCheckup: userData.last_checkup_date ? new Date(userData.last_checkup_date) : undefined,
-        nextCheckup: userData.next_checkup_date ? new Date(userData.next_checkup_date) : undefined,
-        isActive: userData.is_active,
-        birthDate: userData.birth_date ? new Date(userData.birth_date) : undefined,
-        gender: userData.gender,
-        createdAt: new Date(userData.created_at),
-        updatedAt: userData.updated_at ? new Date(userData.updated_at) : undefined,
-        permissions: getPermissionsByRole(userData.role)
-      }));
+        avatar: 'https://images.pexels.com/photos/3768911/pexels-photo-3768911.jpeg?auto=compress&cs=tinysrgb&w=400',
+        permissions: [],
+        isActive: true,
+        createdAt: new Date()
+      };
+
+      // Atualizar mock
+      mockUsers[userData.email.toLowerCase()] = newUser;
+
+      // Salvar no localStorage
+      saveUserToStorage(newUser);
+
+      // Se o usuário pertence a uma empresa, incrementar contador
+      if (userData.companyId && companies[userData.companyId]) {
+        const updatedCompany = { 
+          ...companies[userData.companyId], 
+          currentUsers: companies[userData.companyId].currentUsers + 1 
+        };
+        
+        const updatedCompanies = {
+          ...companies,
+          [userData.companyId]: updatedCompany
+        };
+        
+        setCompanies(updatedCompanies);
+        mockCompanies = updatedCompanies;
+        
+        saveCompaniesToStorage(updatedCompanies);
+      }
+
+      return { success: true, message: 'Usuário criado com sucesso!', user: newUser };
     } catch (error) {
-      console.error('Erro inesperado ao buscar todos os usuários:', error);
-      return [];
+      return { success: false, message: 'Erro ao criar usuário' };
+    }
+  }, [companies]);
+
+  const updateUser = useCallback(async (userId: string, userData: any): Promise<any> => {
+    try {
+      // Encontrar usuário por ID
+      const userToUpdate = Object.values(mockUsers).find(u => u.id === userId);
+      
+      if (!userToUpdate) {
+        return { success: false, message: 'Usuário não encontrado' };
+      }
+
+      // Salvar companyId antigo para verificar se mudou
+      const oldCompanyId = userToUpdate.companyId;
+
+      // Atualizar usuário
+      const updatedUser: User = {
+        ...userToUpdate,
+        name: userData.name,
+        email: userData.email,
+        role: userData.role,
+        companyId: userData.companyId,
+        department: userData.department,
+        updatedAt: new Date()
+      };
+
+      // Atualizar mock
+      delete mockUsers[userToUpdate.email.toLowerCase()];
+      mockUsers[userData.email.toLowerCase()] = updatedUser;
+
+      // Salvar no localStorage
+      saveUserToStorage(updatedUser);
+
+      // Atualizar contadores de empresa se a empresa mudou
+      if (oldCompanyId !== userData.companyId) {
+        const updatedCompanies = { ...companies };
+        
+        // Decrementar da empresa antiga
+        if (oldCompanyId && updatedCompanies[oldCompanyId]) {
+          updatedCompanies[oldCompanyId] = {
+            ...updatedCompanies[oldCompanyId],
+            currentUsers: Math.max(0, updatedCompanies[oldCompanyId].currentUsers - 1)
+          };
+        }
+        
+        // Incrementar na nova empresa
+        if (userData.companyId && updatedCompanies[userData.companyId]) {
+          updatedCompanies[userData.companyId] = {
+            ...updatedCompanies[userData.companyId],
+            currentUsers: updatedCompanies[userData.companyId].currentUsers + 1
+          };
+        }
+        
+        setCompanies(updatedCompanies);
+        mockCompanies = updatedCompanies;
+        
+        saveCompaniesToStorage(updatedCompanies);
+      }
+
+      // Se for o usuário atual, atualizar o estado
+      if (user && user.id === userId) {
+        setUser(updatedUser);
+      }
+
+      return { success: true, message: 'Usuário atualizado com sucesso!', user: updatedUser };
+    } catch (error) {
+      return { success: false, message: 'Erro ao atualizar usuário' };
+    }
+  }, [companies, user]);
+
+  const toggleUserStatus = useCallback(async (userId: string): Promise<any> => {
+    try {
+      // Encontrar usuário por ID
+      const userToUpdate = Object.values(mockUsers).find(u => u.id === userId);
+      
+      if (!userToUpdate) {
+        return { success: false, message: 'Usuário não encontrado' };
+      }
+
+      // Não permitir alteração do próprio usuário
+      if (user && user.id === userId) {
+        return { success: false, message: 'Você não pode alterar seu próprio status' };
+      }
+
+      // Alternar status
+      const updatedUser: User = {
+        ...userToUpdate,
+        isActive: !userToUpdate.isActive,
+        updatedAt: new Date()
+      };
+
+      // Atualizar mock
+      mockUsers[userToUpdate.email.toLowerCase()] = updatedUser;
+
+      // Salvar no localStorage
+      saveUserToStorage(updatedUser);
+
+      const statusMessage = updatedUser.isActive ? 'ativado' : 'desativado';
+      return { 
+        success: true, 
+        message: `Usuário ${statusMessage} com sucesso!`, 
+        user: updatedUser 
+      };
+    } catch (error) {
+      return { success: false, message: 'Erro ao alterar status do usuário' };
     }
   }, [user]);
+
+  const deleteUser = useCallback(async (userId: string): Promise<any> => {
+    try {
+      // Encontrar usuário por ID
+      const userToDelete = Object.values(mockUsers).find(u => u.id === userId);
+      
+      if (!userToDelete) {
+        return { success: false, message: 'Usuário não encontrado' };
+      }
+
+      // Não permitir exclusão do próprio usuário
+      if (user && user.id === userId) {
+        return { success: false, message: 'Você não pode excluir sua própria conta' };
+      }
+
+      // Salvar companyId para atualizar contador
+      const companyId = userToDelete.companyId;
+
+      // Remover usuário
+      delete mockUsers[userToDelete.email.toLowerCase()];
+
+      // Remover do localStorage
+      removeUserFromStorage(userId);
+
+      // Atualizar contador de usuários da empresa
+      if (companyId && companies[companyId]) {
+        const updatedCompany = { 
+          ...companies[companyId], 
+          currentUsers: Math.max(0, companies[companyId].currentUsers - 1) 
+        };
+        
+        const updatedCompanies = {
+          ...companies,
+          [companyId]: updatedCompany
+        };
+        
+        setCompanies(updatedCompanies);
+        mockCompanies = updatedCompanies;
+        
+        saveCompaniesToStorage(updatedCompanies);
+      }
+
+      return { success: true, message: 'Usuário excluído com sucesso!' };
+    } catch (error) {
+      return { success: false, message: 'Erro ao excluir usuário' };
+    }
+  }, [companies, user]);
+
+  const getAllUsers = useCallback(() => {
+    return mockUsers;
+  }, []);
 
   return {
     user,
