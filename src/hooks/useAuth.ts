@@ -1,209 +1,128 @@
 import { useState, useEffect, useCallback } from 'react';
-import { User, Permission, Company, CheckupResult, CompanyCheckupSettings, UserProfileUpdate, SubscriptionPlan, CompanyRecommendation } from '../types';
-
-// Importar funções de armazenamento
-import {
-  loadUsersFromStorage,
-  saveUsersToStorage,
-  saveUserToStorage,
-  removeUserFromStorage,
-  loadCompaniesFromStorage,
-  saveCompaniesToStorage,
-  removeCompanyFromStorage,
-  loadSubscriptionPlansFromStorage,
-  saveSubscriptionPlansToStorage
-} from '../utils/userStorage';
-
-// Importar funções de validação
-import { 
-  validateEmail, 
-  validatePassword, 
-  getRoleDisplayName as getRoleLabel
-} from '../utils/userValidation';
-
-// Importar cliente Supabase (para uso futuro com backend real)
+import { User, Company, CheckupResult, CompanyCheckupSettings, UserProfileUpdate, SubscriptionPlan, CompanyRecommendation } from '../types';
 import { supabase } from '../lib/supabase';
-
-// ID do Super Admin para verificações
-const SUPER_ADMIN_ID = 'admin-123';
-
-// Mock data inicial
-let mockUsers: Record<string, User> = {
-  'admin@serenus.com': {
-    id: SUPER_ADMIN_ID,
-    name: 'Administrador',
-    email: 'admin@serenus.com',
-    role: 'super_admin',
-    permissions: [],
-    avatar: 'https://images.pexels.com/photos/3768911/pexels-photo-3768911.jpeg?auto=compress&cs=tinysrgb&w=400',
-    isActive: true,
-    createdAt: new Date('2025-01-01')
-  }
-};
-
-let mockCompanies: Record<string, Company> = {};
-
-let mockSubscriptionPlans: Record<string, SubscriptionPlan> = {
-  'plan1': {
-    id: 'plan1',
-    name: 'Básico',
-    value: 29.90,
-    periodicity: 'monthly',
-    features: ['Até 50 usuários', 'Checkups mensais', 'Relatórios básicos', 'Suporte por email'],
-    isActive: true,
-    createdAt: new Date('2025-01-01'),
-    description: 'Plano ideal para pequenas empresas iniciando sua jornada de bem-estar'
-  },
-  'plan2': {
-    id: 'plan2',
-    name: 'Premium',
-    value: 79.90,
-    periodicity: 'monthly',
-    features: ['Até 200 usuários', 'Checkups personalizáveis', 'Relatórios avançados', 'Recomendações personalizadas', 'Suporte prioritário'],
-    isActive: true,
-    createdAt: new Date('2025-01-01'),
-    description: 'Recursos avançados para empresas em crescimento'
-  },
-  'plan3': {
-    id: 'plan3',
-    name: 'Enterprise',
-    value: 199.90,
-    periodicity: 'monthly',
-    features: ['Até 1000 usuários', 'API dedicada', 'Checkups customizados', 'Relatórios completos', 'Integração com outros sistemas', 'Suporte 24/7'],
-    isActive: true,
-    createdAt: new Date('2025-01-01'),
-    description: 'Solução completa para grandes organizações'
-  }
-};
-
-// Mock de configurações de checkup por empresa
-const mockCompanyCheckupSettings: Record<string, CompanyCheckupSettings> = {};
-
-// Mock de recomendações por empresa
-const mockCompanyRecommendations: Record<string, CompanyRecommendation[]> = {};
+import { validateEmail, validatePassword, getRoleDisplayName as getRoleLabel } from '../utils/userValidation';
 
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [companies, setCompanies] = useState<Record<string, Company>>({});
-  const [subscriptionPlans, setSubscriptionPlans] = useState<Record<string, SubscriptionPlan>>({});
-  
-  // Inicialização
+
+  // Inicialização e carregamento da sessão
   useEffect(() => {
-    // Carregar dados do localStorage na inicialização
-    const storedUsers = loadUsersFromStorage();
-    const storedCompanies = loadCompaniesFromStorage();
-    const storedPlans = loadSubscriptionPlansFromStorage();
-
-    // Inicializar usuários
-    if (storedUsers) {
-      mockUsers = storedUsers;
-    } else {
-      // Salvar dados padrão no localStorage
-      saveUsersToStorage(mockUsers);
-    }
-
-    // Inicializar empresas
-    if (storedCompanies) {
-      mockCompanies = storedCompanies;
-      setCompanies(storedCompanies);
-    } else {
-      setCompanies(mockCompanies);
-    }
-
-    // Inicializar planos de assinatura
-    if (storedPlans) {
-      mockSubscriptionPlans = storedPlans;
-      setSubscriptionPlans(storedPlans);
-    } else {
-      setSubscriptionPlans(mockSubscriptionPlans);
-    }
-
-    // Verificar se há sessão de usuário
-    const savedUser = localStorage.getItem('currentUser');
-    if (savedUser) {
+    const initializeAuth = async () => {
       try {
-        const userData = JSON.parse(savedUser);
-        // Converter strings de data para objetos Date
-        if (userData.createdAt) userData.createdAt = new Date(userData.createdAt);
-        if (userData.updatedAt) userData.updatedAt = new Date(userData.updatedAt);
-        if (userData.lastCheckup) userData.lastCheckup = new Date(userData.lastCheckup);
-        if (userData.nextCheckup) userData.nextCheckup = new Date(userData.nextCheckup);
+        setIsLoading(true);
         
-        setUser(userData);
+        // Obter sessão atual do Supabase
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session?.user) {
+          // Buscar dados completos do usuário na tabela users
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
+            
+          if (userError) {
+            console.error('Erro ao buscar dados do usuário:', userError);
+            setUser(null);
+          } else if (userData) {
+            // Converter o formato dos dados do banco para o formato esperado pelo app
+            const appUser: User = {
+              id: userData.id,
+              name: userData.name,
+              email: userData.email,
+              role: userData.role,
+              companyId: userData.company_id,
+              department: userData.department,
+              avatar: userData.avatar_url,
+              lastCheckup: userData.last_checkup_date ? new Date(userData.last_checkup_date) : undefined,
+              nextCheckup: userData.next_checkup_date ? new Date(userData.next_checkup_date) : undefined,
+              permissions: [],
+              isActive: userData.is_active,
+              createdAt: userData.created_at ? new Date(userData.created_at) : undefined,
+              updatedAt: userData.updated_at ? new Date(userData.updated_at) : undefined
+            };
+            
+            setUser(appUser);
+          }
+        }
       } catch (error) {
-        console.error('Erro ao processar sessão do usuário:', error);
-        localStorage.removeItem('currentUser');
+        console.error('Erro ao inicializar autenticação:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-
-    setIsLoading(false);
+    };
+    
+    initializeAuth();
+    
+    // Configurar listener para mudanças na autenticação
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        // Buscar dados completos do usuário
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+          
+        if (!userError && userData) {
+          const appUser: User = {
+            id: userData.id,
+            name: userData.name,
+            email: userData.email,
+            role: userData.role,
+            companyId: userData.company_id,
+            department: userData.department,
+            avatar: userData.avatar_url,
+            lastCheckup: userData.last_checkup_date ? new Date(userData.last_checkup_date) : undefined,
+            nextCheckup: userData.next_checkup_date ? new Date(userData.next_checkup_date) : undefined,
+            permissions: [],
+            isActive: userData.is_active,
+            createdAt: userData.created_at ? new Date(userData.created_at) : undefined,
+            updatedAt: userData.updated_at ? new Date(userData.updated_at) : undefined
+          };
+          
+          setUser(appUser);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+      }
+    });
+    
+    // Limpar subscription ao desmontar
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
-
-  // Salvar usuário atual no localStorage
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem('currentUser', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('currentUser');
-    }
-  }, [user]);
 
   // Login
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     try {
       setIsLoading(true);
-
-      // Em uma aplicação real, aqui faria a autenticação com Supabase
-      // const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-      // Simular autenticação
-      const user = Object.values(mockUsers).find(
-        u => u.email.toLowerCase() === email.toLowerCase()
-      );
-
-      if (!user) {
-        console.log('Usuário não encontrado:', email);
+      
+      // Autenticar com Supabase
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      
+      if (error) {
+        console.error('Erro ao fazer login:', error.message);
+        return false;
+      }
+      
+      if (!data.session) {
+        console.error('Login falhou: Nenhuma sessão retornada');
         return false;
       }
 
-      // Em aplicação real, verificaria senha com bcrypt
-      // Em mock, apenas verificamos se é a senha padrão para admin ou "senha123" para outros
-      const isAdmin = user.role === 'super_admin' && email === 'admin@serenus.com';
-      const validPassword = isAdmin ? password === 'admin123456' : password === 'senha123';
-
-      if (!validPassword) {
-        console.log('Senha inválida para:', email);
-        return false;
-      }
-
-      // Gerar histórico mock de checkup se não existir
-      if (!user.checkupHistory) {
-        const date = new Date();
-        date.setDate(date.getDate() - 30);
-        
-        user.lastCheckup = date;
-        user.nextCheckup = new Date();
-        user.checkupHistory = [
-          {
-            id: 'checkup1',
-            userId: user.id,
-            companyId: user.companyId || '',
-            date: date,
-            responses: [],
-            scores: { stress: 16, anxiety: 8, depression: 12 },
-            classifications: { stress: 'leve', anxiety: 'leve', depression: 'leve' },
-            overallScore: 78,
-            severityLevel: 'leve',
-            nextCheckupDate: new Date()
-          }
-        ];
-      }
-
-      setUser(user);
+      // O usuário será carregado pelo onAuthStateChange listener
       return true;
+      
     } catch (error) {
-      console.error('Erro no login:', error);
+      console.error('Erro inesperado no login:', error);
       return false;
     } finally {
       setIsLoading(false);
@@ -211,10 +130,23 @@ export const useAuth = () => {
   }, []);
 
   // Logout
-  const logout = useCallback(() => {
-    // Em uma aplicação real, faria logout do Supabase
-    // supabase.auth.signOut();
-    setUser(null);
+  const logout = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      
+      const { error } = await supabase.auth.signOut();
+      
+      if (error) {
+        console.error('Erro ao fazer logout:', error);
+      } else {
+        setUser(null);
+      }
+      
+    } catch (error) {
+      console.error('Erro inesperado no logout:', error);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
   // Atualizar perfil do usuário
@@ -223,45 +155,66 @@ export const useAuth = () => {
       if (!user) {
         return { success: false, message: 'Usuário não autenticado' };
       }
-
+      
       setIsLoading(true);
-
-      // Em uma aplicação real, atualizaria o perfil no Supabase
-      // const { data, error } = await supabase.from('users').update({...}).eq('id', user.id);
-
-      // Validar senha atual (simulação)
-      if (profileData.currentPassword) {
-        const isAdmin = user.role === 'super_admin' && user.email === 'admin@serenus.com';
-        const validPassword = isAdmin 
-          ? profileData.currentPassword === 'admin123456' 
-          : profileData.currentPassword === 'senha123';
+      
+      // Se estiver alterando a senha, verificar a senha atual
+      if (profileData.currentPassword && profileData.newPassword) {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: user.email,
+          password: profileData.currentPassword
+        });
         
-        if (!validPassword) {
+        if (signInError) {
           return { success: false, message: 'Senha atual incorreta' };
         }
+        
+        // Atualizar senha no Supabase Auth
+        const { error: passwordError } = await supabase.auth.updateUser({
+          password: profileData.newPassword
+        });
+        
+        if (passwordError) {
+          return { success: false, message: `Erro ao atualizar senha: ${passwordError.message}` };
+        }
       }
-
-      // Atualizar mock do usuário
-      const updatedUser: User = {
-        ...user,
+      
+      // Preparar dados para atualização
+      const updateData: any = {
+        name: profileData.name
+      };
+      
+      if (profileData.birthDate) {
+        updateData.birth_date = profileData.birthDate.toISOString().split('T')[0];
+      }
+      
+      if (profileData.gender) {
+        updateData.gender = profileData.gender;
+      }
+      
+      // Atualizar perfil no Supabase
+      const { error: updateError } = await supabase
+        .from('users')
+        .update(updateData)
+        .eq('id', user.id);
+        
+      if (updateError) {
+        return { success: false, message: `Erro ao atualizar perfil: ${updateError.message}` };
+      }
+      
+      // Atualizar usuário no estado
+      setUser(prev => prev ? {
+        ...prev,
         name: profileData.name,
         birthDate: profileData.birthDate,
         gender: profileData.gender,
         updatedAt: new Date()
-      };
-
-      // Atualizar no mock
-      mockUsers[user.email] = updatedUser;
-
-      // Atualizar localStorage
-      saveUserToStorage(updatedUser);
-
-      // Atualizar estado
-      setUser(updatedUser);
-
+      } : null);
+      
       return { success: true, message: 'Perfil atualizado com sucesso' };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao atualizar perfil' };
+      return { success: false, message: `Erro interno: ${error instanceof Error ? error.message : 'Desconhecido'}` };
     } finally {
       setIsLoading(false);
     }
@@ -301,14 +254,82 @@ export const useAuth = () => {
   }, []);
 
   // Obter lista de empresas
-  const getCompanies = useCallback((): Company[] => {
-    return Object.values(companies);
-  }, [companies]);
+  const getCompanies = useCallback(async (): Promise<Company[]> => {
+    try {
+      // Buscar empresas do Supabase
+      const { data, error } = await supabase
+        .from('companies')
+        .select('*');
+        
+      if (error) {
+        console.error('Erro ao buscar empresas:', error);
+        return [];
+      }
+      
+      // Converter formato dos dados
+      return data.map(company => ({
+        id: company.id,
+        name: company.name,
+        domain: company.domain,
+        contactPerson: company.contact_person,
+        corporateEmail: company.corporate_email,
+        landlinePhone: company.landline_phone,
+        mobilePhone: company.mobile_phone,
+        logo: company.logo_url,
+        isActive: company.is_active,
+        plan: company.plan_type,
+        maxUsers: company.max_users,
+        currentUsers: company.current_users,
+        createdAt: new Date(company.created_at),
+        updatedAt: company.updated_at ? new Date(company.updated_at) : undefined,
+        subscriptionPlanId: company.subscription_plan_id
+      }));
+      
+    } catch (error) {
+      console.error('Erro ao obter empresas:', error);
+      return [];
+    }
+  }, []);
 
   // Obter empresa por ID
-  const getCompanyById = useCallback((companyId: string): Company | undefined => {
-    return companies[companyId];
-  }, [companies]);
+  const getCompanyById = useCallback(async (companyId: string): Promise<Company | undefined> => {
+    try {
+      // Buscar empresa do Supabase
+      const { data, error } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('id', companyId)
+        .single();
+        
+      if (error) {
+        console.error('Erro ao buscar empresa:', error);
+        return undefined;
+      }
+      
+      // Converter formato dos dados
+      return {
+        id: data.id,
+        name: data.name,
+        domain: data.domain,
+        contactPerson: data.contact_person,
+        corporateEmail: data.corporate_email,
+        landlinePhone: data.landline_phone,
+        mobilePhone: data.mobile_phone,
+        logo: data.logo_url,
+        isActive: data.is_active,
+        plan: data.plan_type,
+        maxUsers: data.max_users,
+        currentUsers: data.current_users,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : undefined,
+        subscriptionPlanId: data.subscription_plan_id
+      };
+      
+    } catch (error) {
+      console.error('Erro ao obter empresa:', error);
+      return undefined;
+    }
+  }, []);
 
   // Registrar nova empresa
   const registerCompany = useCallback(async (companyData: {
@@ -325,9 +346,6 @@ export const useAuth = () => {
     try {
       setIsLoading(true);
       
-      // Em uma aplicação real, criaria a empresa no Supabase
-      // const { data, error } = await supabase.from('companies').insert({...}).select().single();
-
       // Validações
       if (!companyData.name || !companyData.domain || !companyData.contactPerson || 
           !companyData.corporateEmail || !companyData.mobilePhone) {
@@ -339,100 +357,137 @@ export const useAuth = () => {
       }
 
       // Verificar se domínio já existe
-      if (Object.values(companies).some(c => c.domain.toLowerCase() === companyData.domain.toLowerCase())) {
+      const { data: existingCompany, error: checkError } = await supabase
+        .from('companies')
+        .select('id')
+        .eq('domain', companyData.domain)
+        .single();
+        
+      if (!checkError && existingCompany) {
         return { success: false, message: 'Domínio já está em uso' };
       }
-
-      // Criar nova empresa
-      const newCompany: Company = {
-        id: `company_${Date.now()}`,
+      
+      // Preparar dados para inserção
+      const insertData = {
         name: companyData.name,
         domain: companyData.domain,
-        contactPerson: companyData.contactPerson,
-        corporateEmail: companyData.corporateEmail,
-        landlinePhone: companyData.landlinePhone,
-        mobilePhone: companyData.mobilePhone,
-        logo: companyData.logoData ? `data:image/jpeg;base64,${companyData.logoData}` : '/serenus.png',
-        createdAt: new Date(),
-        isActive: true,
-        plan: companyData.plan,
-        maxUsers: companyData.maxUsers,
-        currentUsers: 0
-      };
-
-      // Atualizar estado local
-      const updatedCompanies = {
-        ...companies,
-        [newCompany.id]: newCompany
+        contact_person: companyData.contactPerson,
+        corporate_email: companyData.corporateEmail,
+        landline_phone: companyData.landlinePhone,
+        mobile_phone: companyData.mobilePhone,
+        logo_url: companyData.logoData ? `data:image/jpeg;base64,${companyData.logoData}` : '/serenus.png',
+        is_active: true,
+        plan_type: companyData.plan,
+        max_users: companyData.maxUsers,
+        current_users: 0
       };
       
-      setCompanies(updatedCompanies);
-      mockCompanies = updatedCompanies;
-
-      // Persistir no localStorage
-      saveCompaniesToStorage(updatedCompanies);
-
-      // Criar configurações de checkup padrão para a empresa
-      mockCompanyCheckupSettings[newCompany.id] = {
-        id: `settings_${Date.now()}`,
-        companyId: newCompany.id,
-        normalIntervalDays: 90,
-        severeIntervalDays: 30,
-        autoRemindersEnabled: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
+      // Inserir empresa no Supabase
+      const { data: newCompanyData, error: insertError } = await supabase
+        .from('companies')
+        .insert([insertData])
+        .select()
+        .single();
+        
+      if (insertError) {
+        console.error('Erro ao inserir empresa:', insertError);
+        return { success: false, message: `Erro ao registrar empresa: ${insertError.message}` };
+      }
+      
+      // Converter formato dos dados para o formato da aplicação
+      const newCompany: Company = {
+        id: newCompanyData.id,
+        name: newCompanyData.name,
+        domain: newCompanyData.domain,
+        contactPerson: newCompanyData.contact_person,
+        corporateEmail: newCompanyData.corporate_email,
+        landlinePhone: newCompanyData.landline_phone,
+        mobilePhone: newCompanyData.mobile_phone,
+        logo: newCompanyData.logo_url,
+        isActive: newCompanyData.is_active,
+        plan: newCompanyData.plan_type,
+        maxUsers: newCompanyData.max_users,
+        currentUsers: newCompanyData.current_users,
+        createdAt: new Date(newCompanyData.created_at),
+        updatedAt: newCompanyData.updated_at ? new Date(newCompanyData.updated_at) : undefined
       };
 
-      return { success: true, message: 'Empresa cadastrada com sucesso!', company: newCompany };
+      // Criar configurações de checkup padrão para a empresa
+      await supabase
+        .from('company_checkup_settings')
+        .insert([{
+          company_id: newCompany.id,
+          normal_interval_days: 90,
+          severe_interval_days: 30,
+          auto_reminders_enabled: true
+        }]);
+        
+      // Criar recomendações padrão para a empresa
+      await supabase
+        .from('company_recommendations')
+        .insert([
+          {
+            company_id: newCompany.id,
+            title: 'Cuidando da Saúde Mental',
+            content: 'Pratique técnicas de respiração diariamente para reduzir o estresse. Reserve momentos para atividades prazerosas e desconexão digital. Considere a meditação como parte da sua rotina.',
+            recommendation_type: 'mental_health',
+            order_index: 1
+          },
+          {
+            company_id: newCompany.id,
+            title: 'Alimentação Saudável',
+            content: 'Mantenha uma dieta equilibrada com frutas, vegetais e proteínas magras. Hidrate-se adequadamente bebendo pelo menos 2 litros de água por dia. Evite alimentos ultraprocessados e excesso de açúcar.',
+            recommendation_type: 'nutrition',
+            order_index: 2
+          }
+        ]);
 
+      return { success: true, message: 'Empresa cadastrada com sucesso!', company: newCompany };
+      
     } catch (error) {
       console.error('Erro ao registrar empresa:', error);
-      return { success: false, message: 'Erro ao registrar empresa. Tente novamente.' };
+      return { success: false, message: `Erro ao registrar empresa: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
     } finally {
       setIsLoading(false);
     }
-  }, [companies]);
+  }, []);
 
   // Excluir empresa
   const deleteCompany = useCallback(async (companyId: string): Promise<{ success: boolean; message: string }> => {
     try {
       setIsLoading(true);
       
-      // Em uma aplicação real, excluiria a empresa no Supabase
-      // const { error } = await supabase.from('companies').delete().eq('id', companyId);
-
       // Verificar se a empresa existe
-      if (!companies[companyId]) {
+      const { data: company, error: checkError } = await supabase
+        .from('companies')
+        .select('name')
+        .eq('id', companyId)
+        .single();
+        
+      if (checkError) {
         return { success: false, message: 'Empresa não encontrada' };
       }
-
-      // Armazenar o nome para mensagem de sucesso
-      const companyName = companies[companyId].name;
-
-      // Criar cópia atualizada das empresas
-      const updatedCompanies = { ...companies };
-      delete updatedCompanies[companyId];
       
-      // Atualizar estado
-      setCompanies(updatedCompanies);
-      mockCompanies = updatedCompanies;
+      // Excluir empresa
+      const { error: deleteError } = await supabase
+        .from('companies')
+        .delete()
+        .eq('id', companyId);
+        
+      if (deleteError) {
+        console.error('Erro ao excluir empresa:', deleteError);
+        return { success: false, message: `Erro ao excluir empresa: ${deleteError.message}` };
+      }
 
-      // Persistir no localStorage
-      saveCompaniesToStorage(updatedCompanies);
+      return { success: true, message: `Empresa "${company.name}" excluída com sucesso!` };
       
-      // Limpar configurações relacionadas
-      delete mockCompanyCheckupSettings[companyId];
-      delete mockCompanyRecommendations[companyId];
-
-      return { success: true, message: `Empresa "${companyName}" excluída com sucesso!` };
-
     } catch (error) {
       console.error('Erro ao excluir empresa:', error);
-      return { success: false, message: 'Erro ao excluir empresa. Tente novamente.' };
+      return { success: false, message: `Erro ao excluir empresa: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
     } finally {
       setIsLoading(false);
     }
-  }, [companies]);
+  }, []);
 
   // Registrar usuário
   const registerUser = useCallback(async (userData: {
@@ -445,9 +500,6 @@ export const useAuth = () => {
   }): Promise<{ success: boolean; message: string; user?: User }> => {
     try {
       setIsLoading(true);
-
-      // Em uma aplicação real, criaria o usuário no Supabase Auth
-      // const { data, error } = await supabase.auth.signUp({email, password, ...});
 
       // Validações
       if (!userData.name || !userData.email || !userData.password) {
@@ -463,93 +515,174 @@ export const useAuth = () => {
         return { success: false, message: passwordValidation.message || 'Senha inválida' };
       }
 
-      // Verificar se email já existe
-      if (Object.values(mockUsers).some(u => u.email.toLowerCase() === userData.email.toLowerCase())) {
-        return { success: false, message: 'Email já está em uso' };
-      }
-
       // Verificar se a empresa existe
-      if (!companies[userData.companyId]) {
-        return { success: false, message: 'Empresa não encontrada' };
+      if (userData.companyId) {
+        const { data: company, error: companyError } = await supabase
+          .from('companies')
+          .select('id')
+          .eq('id', userData.companyId)
+          .single();
+          
+        if (companyError || !company) {
+          return { success: false, message: 'Empresa não encontrada' };
+        }
       }
 
-      // Criar novo usuário
-      const newUser: User = {
-        id: `user_${Date.now()}`,
-        name: userData.name,
+      // Criar usuário na autenticação do Supabase
+      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
         email: userData.email,
-        role: userData.role,
-        companyId: userData.companyId,
-        department: userData.department,
-        avatar: 'https://images.pexels.com/photos/3768911/pexels-photo-3768911.jpeg?auto=compress&cs=tinysrgb&w=400',
+        password: userData.password,
+        email_confirm: true, // Auto-confirmar email
+        user_metadata: {
+          name: userData.name,
+          role: userData.role
+        }
+      });
+      
+      if (authError) {
+        return { success: false, message: `Erro ao criar usuário: ${authError.message}` };
+      }
+      
+      if (!authData.user) {
+        return { success: false, message: 'Erro ao criar usuário: Resposta inválida do servidor' };
+      }
+      
+      // Criar registro do usuário na tabela users
+      const { data: userData2, error: userError } = await supabase
+        .from('users')
+        .insert([{
+          id: authData.user.id,
+          name: userData.name,
+          email: userData.email,
+          role: userData.role,
+          company_id: userData.companyId,
+          department: userData.department,
+          is_active: true
+        }])
+        .select()
+        .single();
+        
+      if (userError) {
+        // Tentar remover o usuário da autenticação em caso de erro
+        await supabase.auth.admin.deleteUser(authData.user.id);
+        
+        return { success: false, message: `Erro ao criar registro do usuário: ${userError.message}` };
+      }
+      
+      // Converter formato de dados para o formato da aplicação
+      const newUser: User = {
+        id: userData2.id,
+        name: userData2.name,
+        email: userData2.email,
+        role: userData2.role,
+        companyId: userData2.company_id,
+        department: userData2.department,
+        avatar: userData2.avatar_url,
         permissions: [],
-        isActive: true,
-        createdAt: new Date()
+        isActive: userData2.is_active,
+        createdAt: new Date(userData2.created_at),
+        updatedAt: userData2.updated_at ? new Date(userData2.updated_at) : undefined
       };
 
-      // Atualizar mock
-      mockUsers[userData.email.toLowerCase()] = newUser;
-
-      // Salvar no localStorage
-      saveUserToStorage(newUser);
-
-      // Incrementar contador de usuários da empresa
-      const company = companies[userData.companyId];
-      if (company) {
-        const updatedCompany = { ...company, currentUsers: company.currentUsers + 1 };
-        const updatedCompanies = { ...companies, [userData.companyId]: updatedCompany };
-        
-        setCompanies(updatedCompanies);
-        mockCompanies = updatedCompanies;
-        
-        saveCompaniesToStorage(updatedCompanies);
-      }
-
       return { success: true, message: 'Usuário criado com sucesso!', user: newUser };
+      
     } catch (error) {
       console.error('Erro ao registrar usuário:', error);
-      return { success: false, message: 'Erro ao registrar usuário. Tente novamente.' };
+      return { success: false, message: `Erro ao registrar usuário: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
     } finally {
       setIsLoading(false);
     }
-  }, [companies]);
+  }, []);
 
   // Salvar resultado de checkup
   const saveCheckupResult = useCallback(async (checkupResult: CheckupResult): Promise<boolean> => {
     try {
       if (!user) return false;
       
-      // Atualizar mock do usuário com os dados do checkup
-      const updatedUser = { ...user };
-      updatedUser.lastCheckup = checkupResult.date;
-      updatedUser.nextCheckup = checkupResult.nextCheckupDate;
+      setIsLoading(true);
       
-      if (!updatedUser.checkupHistory) {
-        updatedUser.checkupHistory = [];
+      // Preparar dados para inserção
+      const insertData = {
+        user_id: checkupResult.userId,
+        company_id: checkupResult.companyId,
+        responses: checkupResult.responses,
+        scores: checkupResult.scores,
+        classifications: checkupResult.classifications,
+        overall_score: checkupResult.overallScore,
+        severity_level: checkupResult.severityLevel,
+        next_checkup_date: checkupResult.nextCheckupDate.toISOString().split('T')[0],
+        // IAS fields
+        ias_responses: checkupResult.iasResponses,
+        ias_total_score: checkupResult.iasTotalScore,
+        ias_classification: checkupResult.iasClassification,
+        // Combined assessment fields
+        combined_recommended_paths: checkupResult.combinedRecommendedPaths,
+        combined_psychologist_referral_needed: checkupResult.combinedPsychologistReferralNeeded,
+        combined_justification: checkupResult.combinedJustification,
+        combined_critical_level: checkupResult.combinedCriticalLevel,
+        combined_recommendations: checkupResult.combinedRecommendations
+      };
+      
+      // Inserir no Supabase
+      const { error } = await supabase
+        .from('checkup_results')
+        .insert([insertData]);
+        
+      if (error) {
+        console.error('Erro ao salvar resultado de checkup:', error);
+        return false;
       }
       
-      updatedUser.checkupHistory.push(checkupResult);
-      
-      // Atualizar no mock
-      mockUsers[user.email] = updatedUser;
-      
-      // Atualizar localStorage
-      saveUserToStorage(updatedUser);
-      
-      // Atualizar estado
-      setUser(updatedUser);
+      // Atualizar o objeto user com as novas datas de checkup
+      // Nota: a trigger no Supabase já atualizará a tabela users
+      // Aqui só atualizamos o estado local para refletir a mudança
+      setUser(prev => prev ? {
+        ...prev,
+        lastCheckup: new Date(),
+        nextCheckup: checkupResult.nextCheckupDate
+      } : null);
       
       return true;
+      
     } catch (error) {
       console.error('Erro ao salvar resultado de checkup:', error);
       return false;
+    } finally {
+      setIsLoading(false);
     }
   }, [user]);
 
   // Gerenciamento de planos de assinatura
-  const getSubscriptionPlans = useCallback(() => {
-    return Object.values(subscriptionPlans);
-  }, [subscriptionPlans]);
+  const getSubscriptionPlans = useCallback(async (): Promise<SubscriptionPlan[]> => {
+    try {
+      // Buscar planos do Supabase
+      const { data, error } = await supabase
+        .from('subscription_plans')
+        .select('*');
+        
+      if (error) {
+        console.error('Erro ao buscar planos de assinatura:', error);
+        return [];
+      }
+      
+      // Converter formato dos dados
+      return data.map(plan => ({
+        id: plan.id,
+        name: plan.name,
+        value: plan.value,
+        periodicity: plan.periodicity,
+        features: plan.features,
+        isActive: plan.is_active,
+        createdAt: new Date(plan.created_at),
+        updatedAt: plan.updated_at ? new Date(plan.updated_at) : undefined,
+        description: plan.description
+      }));
+      
+    } catch (error) {
+      console.error('Erro ao obter planos de assinatura:', error);
+      return [];
+    }
+  }, []);
 
   const addSubscriptionPlan = useCallback(async (planData: {
     name: string;
@@ -559,40 +692,57 @@ export const useAuth = () => {
     description?: string;
   }): Promise<{ success: boolean; message: string; plan?: SubscriptionPlan }> => {
     try {
+      setIsLoading(true);
+      
       // Validações
       if (!planData.name || planData.value <= 0) {
         return { success: false, message: 'Nome e valor são obrigatórios' };
       }
-
-      // Criar novo plano
-      const newPlan: SubscriptionPlan = {
-        id: `plan_${Date.now()}`,
+      
+      // Preparar dados para inserção
+      const insertData = {
         name: planData.name,
         value: planData.value,
         periodicity: planData.periodicity,
         features: planData.features || [],
-        isActive: true,
-        createdAt: new Date(),
+        is_active: true,
         description: planData.description
       };
-
-      // Atualizar mock
-      const updatedPlans = {
-        ...subscriptionPlans,
-        [newPlan.id]: newPlan
+      
+      // Inserir no Supabase
+      const { data, error } = await supabase
+        .from('subscription_plans')
+        .insert([insertData])
+        .select()
+        .single();
+        
+      if (error) {
+        console.error('Erro ao adicionar plano:', error);
+        return { success: false, message: `Erro ao adicionar plano: ${error.message}` };
+      }
+      
+      // Converter formato dos dados
+      const newPlan: SubscriptionPlan = {
+        id: data.id,
+        name: data.name,
+        value: data.value,
+        periodicity: data.periodicity,
+        features: data.features,
+        isActive: data.is_active,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : undefined,
+        description: data.description
       };
-      
-      mockSubscriptionPlans = updatedPlans;
-      setSubscriptionPlans(updatedPlans);
-      
-      // Persistir no localStorage
-      saveSubscriptionPlansToStorage(updatedPlans);
 
       return { success: true, message: 'Plano criado com sucesso!', plan: newPlan };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao adicionar plano' };
+      console.error('Erro ao adicionar plano:', error);
+      return { success: false, message: `Erro ao adicionar plano: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [subscriptionPlans]);
+  }, []);
 
   const updateSubscriptionPlan = useCallback(async (planId: string, planData: {
     name: string;
@@ -602,113 +752,190 @@ export const useAuth = () => {
     description?: string;
   }): Promise<{ success: boolean; message: string; plan?: SubscriptionPlan }> => {
     try {
+      setIsLoading(true);
+      
       // Verificar se o plano existe
-      if (!subscriptionPlans[planId]) {
+      const { data: existingPlan, error: checkError } = await supabase
+        .from('subscription_plans')
+        .select('id')
+        .eq('id', planId)
+        .single();
+        
+      if (checkError) {
         return { success: false, message: 'Plano não encontrado' };
       }
-
-      // Atualizar plano
-      const updatedPlan = {
-        ...subscriptionPlans[planId],
+      
+      // Preparar dados para atualização
+      const updateData = {
         name: planData.name,
         value: planData.value,
         periodicity: planData.periodicity,
         features: planData.features,
         description: planData.description,
-        updatedAt: new Date()
-      };
-
-      // Atualizar mock
-      const updatedPlans = {
-        ...subscriptionPlans,
-        [planId]: updatedPlan
+        updated_at: new Date().toISOString()
       };
       
-      mockSubscriptionPlans = updatedPlans;
-      setSubscriptionPlans(updatedPlans);
+      // Atualizar no Supabase
+      const { data, error } = await supabase
+        .from('subscription_plans')
+        .update(updateData)
+        .eq('id', planId)
+        .select()
+        .single();
+        
+      if (error) {
+        console.error('Erro ao atualizar plano:', error);
+        return { success: false, message: `Erro ao atualizar plano: ${error.message}` };
+      }
       
-      // Persistir no localStorage
-      saveSubscriptionPlansToStorage(updatedPlans);
+      // Converter formato dos dados
+      const updatedPlan: SubscriptionPlan = {
+        id: data.id,
+        name: data.name,
+        value: data.value,
+        periodicity: data.periodicity,
+        features: data.features,
+        isActive: data.is_active,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : undefined,
+        description: data.description
+      };
 
       return { success: true, message: 'Plano atualizado com sucesso!', plan: updatedPlan };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao atualizar plano' };
+      console.error('Erro ao atualizar plano:', error);
+      return { success: false, message: `Erro ao atualizar plano: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [subscriptionPlans]);
+  }, []);
 
   const togglePlanStatus = useCallback(async (planId: string): Promise<{ success: boolean; message: string; plan?: SubscriptionPlan }> => {
     try {
-      // Verificar se o plano existe
-      if (!subscriptionPlans[planId]) {
+      setIsLoading(true);
+      
+      // Buscar plano atual
+      const { data: currentPlan, error: checkError } = await supabase
+        .from('subscription_plans')
+        .select('*')
+        .eq('id', planId)
+        .single();
+        
+      if (checkError) {
         return { success: false, message: 'Plano não encontrado' };
       }
-
-      const plan = subscriptionPlans[planId];
       
       // Alternar status
-      const updatedPlan = {
-        ...plan,
-        isActive: !plan.isActive,
-        updatedAt: new Date()
-      };
-
-      // Atualizar mock
-      const updatedPlans = {
-        ...subscriptionPlans,
-        [planId]: updatedPlan
-      };
+      const newStatus = !currentPlan.is_active;
       
-      mockSubscriptionPlans = updatedPlans;
-      setSubscriptionPlans(updatedPlans);
+      // Atualizar no Supabase
+      const { data, error } = await supabase
+        .from('subscription_plans')
+        .update({ 
+          is_active: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', planId)
+        .select()
+        .single();
+        
+      if (error) {
+        console.error('Erro ao alternar status do plano:', error);
+        return { success: false, message: `Erro ao alternar status do plano: ${error.message}` };
+      }
       
-      // Persistir no localStorage
-      saveSubscriptionPlansToStorage(updatedPlans);
+      // Converter formato dos dados
+      const updatedPlan: SubscriptionPlan = {
+        id: data.id,
+        name: data.name,
+        value: data.value,
+        periodicity: data.periodicity,
+        features: data.features,
+        isActive: data.is_active,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : undefined,
+        description: data.description
+      };
 
       const statusMessage = updatedPlan.isActive ? 'ativado' : 'desativado';
-      return { 
-        success: true, 
-        message: `Plano ${updatedPlan.name} ${statusMessage} com sucesso!`, 
-        plan: updatedPlan 
-      };
+      return { success: true, message: `Plano ${updatedPlan.name} ${statusMessage} com sucesso!`, plan: updatedPlan };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao alterar status do plano' };
+      console.error('Erro ao alternar status do plano:', error);
+      return { success: false, message: `Erro ao alternar status do plano: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [subscriptionPlans]);
+  }, []);
 
   // Gerenciamento de configurações de checkup
   const getCompanyCheckupSettings = useCallback(async (companyId: string): Promise<CompanyCheckupSettings | null> => {
-    // Verificar se a empresa existe
-    if (!companies[companyId]) {
+    try {
+      // Buscar configurações do Supabase
+      const { data, error } = await supabase
+        .from('company_checkup_settings')
+        .select('*')
+        .eq('company_id', companyId)
+        .single();
+        
+      if (error) {
+        // Se não encontrar, criar configurações padrão
+        if (error.code === 'PGRST116') { // Not Found
+          // Inserir configurações padrão
+          const { data: newData, error: insertError } = await supabase
+            .from('company_checkup_settings')
+            .insert([{
+              company_id: companyId,
+              normal_interval_days: 90,
+              severe_interval_days: 30,
+              auto_reminders_enabled: true
+            }])
+            .select()
+            .single();
+            
+          if (insertError) {
+            console.error('Erro ao criar configurações padrão:', insertError);
+            return null;
+          }
+          
+          // Converter formato dos dados
+          return {
+            id: newData.id,
+            companyId: newData.company_id,
+            normalIntervalDays: newData.normal_interval_days,
+            severeIntervalDays: newData.severe_interval_days,
+            autoRemindersEnabled: newData.auto_reminders_enabled,
+            createdAt: new Date(newData.created_at),
+            updatedAt: newData.updated_at ? new Date(newData.updated_at) : new Date(newData.created_at)
+          };
+        }
+        
+        console.error('Erro ao buscar configurações de checkup:', error);
+        return null;
+      }
+      
+      // Converter formato dos dados
+      return {
+        id: data.id,
+        companyId: data.company_id,
+        normalIntervalDays: data.normal_interval_days,
+        severeIntervalDays: data.severe_interval_days,
+        autoRemindersEnabled: data.auto_reminders_enabled,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : new Date(data.created_at)
+      };
+      
+    } catch (error) {
+      console.error('Erro ao obter configurações de checkup:', error);
       return null;
     }
-
-    // Retornar configurações ou criar padrão
-    if (mockCompanyCheckupSettings[companyId]) {
-      return mockCompanyCheckupSettings[companyId];
-    }
-
-    // Criar configurações padrão
-    const defaultSettings: CompanyCheckupSettings = {
-      id: `settings_${Date.now()}`,
-      companyId,
-      normalIntervalDays: 90,
-      severeIntervalDays: 30,
-      autoRemindersEnabled: true,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    mockCompanyCheckupSettings[companyId] = defaultSettings;
-    return defaultSettings;
-  }, [companies]);
+  }, []);
 
   const saveCompanyCheckupSettings = useCallback(async (settings: Omit<CompanyCheckupSettings, 'id' | 'createdAt' | 'updatedAt'>): Promise<{ success: boolean; message: string }> => {
     try {
-      // Verificar se a empresa existe
-      if (!companies[settings.companyId]) {
-        return { success: false, message: 'Empresa não encontrada' };
-      }
-
+      setIsLoading(true);
+      
       // Validações
       if (settings.normalIntervalDays < 1 || settings.normalIntervalDays > 365) {
         return { success: false, message: 'Intervalo normal deve estar entre 1 e 365 dias' };
@@ -721,278 +948,436 @@ export const useAuth = () => {
       if (settings.severeIntervalDays >= settings.normalIntervalDays) {
         return { success: false, message: 'Intervalo para casos severos deve ser menor que o intervalo normal' };
       }
-
-      // Atualizar ou criar configurações
-      const existingSettings = mockCompanyCheckupSettings[settings.companyId];
       
-      const updatedSettings: CompanyCheckupSettings = {
-        id: existingSettings?.id || `settings_${Date.now()}`,
-        companyId: settings.companyId,
-        normalIntervalDays: settings.normalIntervalDays,
-        severeIntervalDays: settings.severeIntervalDays,
-        autoRemindersEnabled: settings.autoRemindersEnabled,
-        createdAt: existingSettings?.createdAt || new Date(),
-        updatedAt: new Date()
-      };
-
-      mockCompanyCheckupSettings[settings.companyId] = updatedSettings;
-
+      // Verificar se já existem configurações para esta empresa
+      const { data: existingSettings, error: checkError } = await supabase
+        .from('company_checkup_settings')
+        .select('id')
+        .eq('company_id', settings.companyId)
+        .maybeSingle();
+      
+      let result;
+      
+      if (existingSettings) {
+        // Atualizar configurações existentes
+        result = await supabase
+          .from('company_checkup_settings')
+          .update({
+            normal_interval_days: settings.normalIntervalDays,
+            severe_interval_days: settings.severeIntervalDays,
+            auto_reminders_enabled: settings.autoRemindersEnabled,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingSettings.id);
+      } else {
+        // Inserir novas configurações
+        result = await supabase
+          .from('company_checkup_settings')
+          .insert([{
+            company_id: settings.companyId,
+            normal_interval_days: settings.normalIntervalDays,
+            severe_interval_days: settings.severeIntervalDays,
+            auto_reminders_enabled: settings.autoRemindersEnabled
+          }]);
+      }
+      
+      if (result.error) {
+        console.error('Erro ao salvar configurações de checkup:', result.error);
+        return { success: false, message: `Erro ao salvar configurações: ${result.error.message}` };
+      }
+      
       return { success: true, message: 'Configurações salvas com sucesso!' };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao salvar configurações' };
+      console.error('Erro ao salvar configurações de checkup:', error);
+      return { success: false, message: `Erro ao salvar configurações: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [companies]);
+  }, []);
 
   // Gerenciamento de recomendações da empresa
   const getCompanyRecommendations = useCallback(async (companyId: string): Promise<CompanyRecommendation[]> => {
-    // Verificar se a empresa existe
-    if (!companies[companyId]) {
+    try {
+      // Buscar recomendações do Supabase
+      const { data, error } = await supabase
+        .from('company_recommendations')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('order_index', { ascending: true });
+        
+      if (error) {
+        console.error('Erro ao buscar recomendações:', error);
+        return [];
+      }
+      
+      if (data.length === 0) {
+        // Criar recomendações padrão se não houver
+        const defaultRecommendations = [
+          {
+            company_id: companyId,
+            title: 'Cuidando da Saúde Mental',
+            content: 'Pratique técnicas de respiração diariamente para reduzir o estresse. Reserve momentos para atividades prazerosas e desconexão digital. Considere a meditação como parte da sua rotina.',
+            recommendation_type: 'mental_health',
+            order_index: 1
+          },
+          {
+            company_id: companyId,
+            title: 'Alimentação Saudável',
+            content: 'Mantenha uma dieta equilibrada com frutas, vegetais e proteínas magras. Hidrate-se adequadamente bebendo pelo menos 2 litros de água por dia. Evite alimentos ultraprocessados e excesso de açúcar.',
+            recommendation_type: 'nutrition',
+            order_index: 2
+          }
+        ];
+        
+        const { data: newData, error: insertError } = await supabase
+          .from('company_recommendations')
+          .insert(defaultRecommendations)
+          .select();
+          
+        if (insertError) {
+          console.error('Erro ao criar recomendações padrão:', insertError);
+          return [];
+        }
+        
+        // Converter formato dos dados
+        return newData.map(rec => ({
+          id: rec.id,
+          companyId: rec.company_id,
+          title: rec.title,
+          content: rec.content,
+          recommendationType: rec.recommendation_type,
+          orderIndex: rec.order_index,
+          createdAt: new Date(rec.created_at),
+          updatedAt: rec.updated_at ? new Date(rec.updated_at) : new Date(rec.created_at)
+        }));
+      }
+      
+      // Converter formato dos dados
+      return data.map(rec => ({
+        id: rec.id,
+        companyId: rec.company_id,
+        title: rec.title,
+        content: rec.content,
+        recommendationType: rec.recommendation_type,
+        orderIndex: rec.order_index,
+        createdAt: new Date(rec.created_at),
+        updatedAt: rec.updated_at ? new Date(rec.updated_at) : new Date(rec.created_at)
+      }));
+      
+    } catch (error) {
+      console.error('Erro ao obter recomendações:', error);
       return [];
     }
-
-    // Retornar recomendações ou criar padrão
-    if (mockCompanyRecommendations[companyId]) {
-      return mockCompanyRecommendations[companyId];
-    }
-
-    // Criar recomendações padrão
-    const defaultRecommendations: CompanyRecommendation[] = [
-      {
-        id: `rec1_${Date.now()}`,
-        companyId,
-        title: 'Cuidando da Saúde Mental',
-        content: 'Pratique técnicas de respiração diariamente para reduzir o estresse. Reserve momentos para atividades prazerosas e desconexão digital. Considere a meditação como parte da sua rotina.',
-        recommendationType: 'mental_health',
-        orderIndex: 1,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      },
-      {
-        id: `rec2_${Date.now()}`,
-        companyId,
-        title: 'Alimentação Saudável',
-        content: 'Mantenha uma dieta equilibrada com frutas, vegetais e proteínas magras. Hidrate-se adequadamente bebendo pelo menos 2 litros de água por dia. Evite alimentos ultraprocessados e excesso de açúcar.',
-        recommendationType: 'nutrition',
-        orderIndex: 2,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }
-    ];
-
-    mockCompanyRecommendations[companyId] = defaultRecommendations;
-    return defaultRecommendations;
-  }, [companies]);
+  }, []);
 
   const saveCompanyRecommendation = useCallback(async (recommendation: Omit<CompanyRecommendation, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): Promise<{ success: boolean; message: string; recommendation?: CompanyRecommendation }> => {
     try {
-      // Verificar se a empresa existe
-      if (!companies[recommendation.companyId]) {
-        return { success: false, message: 'Empresa não encontrada' };
-      }
-
+      setIsLoading(true);
+      
       // Validações
       if (!recommendation.title.trim() || !recommendation.content.trim()) {
         return { success: false, message: 'Título e conteúdo são obrigatórios' };
       }
-
-      // Inicializar array de recomendações se não existir
-      if (!mockCompanyRecommendations[recommendation.companyId]) {
-        mockCompanyRecommendations[recommendation.companyId] = [];
-      }
-
-      // Se tem ID, é atualização; senão, é criação
+      
+      // Preparar dados para persistência
+      const saveData = {
+        company_id: recommendation.companyId,
+        title: recommendation.title.trim(),
+        content: recommendation.content.trim(),
+        recommendation_type: recommendation.recommendationType,
+        order_index: recommendation.orderIndex
+      };
+      
+      let result;
+      
+      // Atualizar ou inserir com base na presença de ID
       if (recommendation.id) {
-        // Encontrar recomendação existente
-        const index = mockCompanyRecommendations[recommendation.companyId]
-          .findIndex(r => r.id === recommendation.id);
-        
-        if (index === -1) {
-          return { success: false, message: 'Recomendação não encontrada' };
-        }
-
-        // Atualizar recomendação existente
-        const updatedRecommendation: CompanyRecommendation = {
-          ...mockCompanyRecommendations[recommendation.companyId][index],
-          title: recommendation.title,
-          content: recommendation.content,
-          recommendationType: recommendation.recommendationType,
-          orderIndex: recommendation.orderIndex,
-          updatedAt: new Date()
-        };
-
-        mockCompanyRecommendations[recommendation.companyId][index] = updatedRecommendation;
-
-        return { 
-          success: true, 
-          message: 'Recomendação atualizada com sucesso!', 
-          recommendation: updatedRecommendation 
-        };
+        // Atualizar
+        result = await supabase
+          .from('company_recommendations')
+          .update(saveData)
+          .eq('id', recommendation.id)
+          .select()
+          .single();
       } else {
-        // Criar nova recomendação
-        const newRecommendation: CompanyRecommendation = {
-          id: `rec_${Date.now()}`,
-          companyId: recommendation.companyId,
-          title: recommendation.title,
-          content: recommendation.content,
-          recommendationType: recommendation.recommendationType,
-          orderIndex: recommendation.orderIndex,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        };
-
-        mockCompanyRecommendations[recommendation.companyId].push(newRecommendation);
-
-        return { 
-          success: true, 
-          message: 'Recomendação criada com sucesso!', 
-          recommendation: newRecommendation 
-        };
+        // Inserir
+        result = await supabase
+          .from('company_recommendations')
+          .insert([saveData])
+          .select()
+          .single();
       }
+      
+      if (result.error) {
+        console.error('Erro ao salvar recomendação:', result.error);
+        return { success: false, message: `Erro ao salvar recomendação: ${result.error.message}` };
+      }
+      
+      // Converter formato dos dados
+      const savedRecommendation: CompanyRecommendation = {
+        id: result.data.id,
+        companyId: result.data.company_id,
+        title: result.data.title,
+        content: result.data.content,
+        recommendationType: result.data.recommendation_type,
+        orderIndex: result.data.order_index,
+        createdAt: new Date(result.data.created_at),
+        updatedAt: result.data.updated_at ? new Date(result.data.updated_at) : new Date(result.data.created_at)
+      };
+
+      const action = recommendation.id ? 'atualizada' : 'criada';
+      return { 
+        success: true, 
+        message: `Recomendação ${action} com sucesso!`, 
+        recommendation: savedRecommendation 
+      };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao salvar recomendação' };
+      console.error('Erro ao salvar recomendação:', error);
+      return { success: false, message: `Erro ao salvar recomendação: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [companies]);
+  }, []);
 
   const deleteCompanyRecommendation = useCallback(async (id: string, companyId: string): Promise<{ success: boolean; message: string }> => {
     try {
-      // Verificar se a empresa existe
-      if (!companies[companyId]) {
-        return { success: false, message: 'Empresa não encontrada' };
-      }
-
-      // Verificar se há recomendações para a empresa
-      if (!mockCompanyRecommendations[companyId]) {
-        return { success: false, message: 'Nenhuma recomendação encontrada para esta empresa' };
-      }
-
-      // Encontrar recomendação
-      const index = mockCompanyRecommendations[companyId].findIndex(r => r.id === id);
+      setIsLoading(true);
       
-      if (index === -1) {
+      // Verificar se a recomendação existe
+      const { data: recommendation, error: checkError } = await supabase
+        .from('company_recommendations')
+        .select('id, title')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .single();
+        
+      if (checkError) {
         return { success: false, message: 'Recomendação não encontrada' };
       }
-
-      // Remover recomendação
-      mockCompanyRecommendations[companyId].splice(index, 1);
+      
+      // Excluir recomendação
+      const { error } = await supabase
+        .from('company_recommendations')
+        .delete()
+        .eq('id', id);
+        
+      if (error) {
+        console.error('Erro ao excluir recomendação:', error);
+        return { success: false, message: `Erro ao excluir recomendação: ${error.message}` };
+      }
 
       return { success: true, message: 'Recomendação excluída com sucesso!' };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao excluir recomendação' };
+      console.error('Erro ao excluir recomendação:', error);
+      return { success: false, message: `Erro ao excluir recomendação: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [companies]);
+  }, []);
 
   // Funções de gerenciamento de usuários
-  const createUser = useCallback(async (userData: any): Promise<any> => {
+  const createUser = useCallback(async (userData: {
+    name: string;
+    email: string;
+    password: string;
+    role: User['role'];
+    department?: string;
+    companyId?: string;
+  }): Promise<{ success: boolean; message: string; user?: User }> => {
     try {
-      // Validações básicas
-      if (!userData.name || !userData.email || !userData.role) {
-        return { success: false, message: 'Dados incompletos' };
+      setIsLoading(true);
+      
+      // Validações
+      if (!userData.name.trim() || !userData.email.trim() || !userData.role) {
+        return { success: false, message: 'Nome, email e perfil são obrigatórios' };
       }
-
-      // Verificar se email já existe
-      if (Object.values(mockUsers).some(u => u.email.toLowerCase() === userData.email.toLowerCase())) {
-        return { success: false, message: 'Email já está em uso' };
+      
+      if (!validateEmail(userData.email)) {
+        return { success: false, message: 'Email inválido' };
       }
-
-      // Criar novo usuário
-      const newUser: User = {
-        id: `user_${Date.now()}`,
-        name: userData.name,
+      
+      if (userData.password && userData.password.length < 6) {
+        return { success: false, message: 'Senha deve ter pelo menos 6 caracteres' };
+      }
+      
+      // Super Admins não precisam de companyId, outros perfis sim
+      if (userData.role !== 'super_admin' && !userData.companyId) {
+        return { success: false, message: 'Empresa é obrigatória para usuários que não são Super Admin' };
+      }
+      
+      // Criar usuário na autenticação do Supabase
+      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
         email: userData.email,
-        role: userData.role,
-        companyId: userData.companyId,
-        department: userData.department,
-        avatar: 'https://images.pexels.com/photos/3768911/pexels-photo-3768911.jpeg?auto=compress&cs=tinysrgb&w=400',
-        permissions: [],
-        isActive: true,
-        createdAt: new Date()
-      };
-
-      // Atualizar mock
-      mockUsers[userData.email.toLowerCase()] = newUser;
-
-      // Salvar no localStorage
-      saveUserToStorage(newUser);
-
-      // Se o usuário pertence a uma empresa, incrementar contador
-      if (userData.companyId && companies[userData.companyId]) {
-        const updatedCompany = { 
-          ...companies[userData.companyId], 
-          currentUsers: companies[userData.companyId].currentUsers + 1 
-        };
-        
-        const updatedCompanies = {
-          ...companies,
-          [userData.companyId]: updatedCompany
-        };
-        
-        setCompanies(updatedCompanies);
-        mockCompanies = updatedCompanies;
-        
-        saveCompaniesToStorage(updatedCompanies);
+        password: userData.password || Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10), // Senha aleatória se não for fornecida
+        email_confirm: true, // Auto-confirmar email
+        user_metadata: {
+          name: userData.name,
+          role: userData.role
+        }
+      });
+      
+      if (authError) {
+        return { success: false, message: `Erro ao criar usuário: ${authError.message}` };
       }
+      
+      if (!authData.user) {
+        return { success: false, message: 'Erro ao criar usuário: Resposta inválida do servidor' };
+      }
+      
+      // Inserir na tabela users
+      const { data: userData2, error: userError } = await supabase
+        .from('users')
+        .insert([{
+          id: authData.user.id,
+          name: userData.name,
+          email: userData.email,
+          role: userData.role,
+          company_id: userData.role === 'super_admin' ? null : userData.companyId,
+          department: userData.role === 'super_admin' ? null : userData.department,
+          is_active: true
+        }])
+        .select()
+        .single();
+        
+      if (userError) {
+        // Tentar remover o usuário da autenticação em caso de erro
+        try {
+          await supabase.auth.admin.deleteUser(authData.user.id);
+        } catch (deleteError) {
+          console.error('Erro ao remover usuário da autenticação após falha:', deleteError);
+        }
+        
+        return { success: false, message: `Erro ao criar registro do usuário: ${userError.message}` };
+      }
+      
+      // Converter formato dos dados
+      const newUser: User = {
+        id: userData2.id,
+        name: userData2.name,
+        email: userData2.email,
+        role: userData2.role,
+        companyId: userData2.company_id,
+        department: userData2.department,
+        avatar: userData2.avatar_url,
+        permissions: [],
+        isActive: userData2.is_active,
+        createdAt: new Date(userData2.created_at),
+        updatedAt: userData2.updated_at ? new Date(userData2.updated_at) : undefined
+      };
 
       return { success: true, message: 'Usuário criado com sucesso!', user: newUser };
-    } catch (error) {
-      return { success: false, message: 'Erro ao criar usuário' };
-    }
-  }, [companies]);
-
-  const updateUser = useCallback(async (userId: string, userData: any): Promise<any> => {
-    try {
-      // Encontrar usuário por ID
-      const userToUpdate = Object.values(mockUsers).find(u => u.id === userId);
       
-      if (!userToUpdate) {
+    } catch (error) {
+      console.error('Erro ao criar usuário:', error);
+      return { success: false, message: `Erro ao criar usuário: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const updateUser = useCallback(async (userId: string, userData: {
+    name: string;
+    email: string;
+    role: User['role'];
+    department?: string;
+    companyId?: string;
+    password?: string;
+  }): Promise<{ success: boolean; message: string; user?: User }> => {
+    try {
+      setIsLoading(true);
+      
+      // Validações
+      if (!userData.name.trim() || !userData.email.trim() || !userData.role) {
+        return { success: false, message: 'Nome, email e perfil são obrigatórios' };
+      }
+      
+      if (!validateEmail(userData.email)) {
+        return { success: false, message: 'Email inválido' };
+      }
+      
+      if (userData.password && userData.password.length < 6) {
+        return { success: false, message: 'Senha deve ter pelo menos 6 caracteres' };
+      }
+      
+      // Super Admins não precisam de companyId, outros perfis sim
+      if (userData.role !== 'super_admin' && !userData.companyId) {
+        return { success: false, message: 'Empresa é obrigatória para usuários que não são Super Admin' };
+      }
+      
+      // Buscar usuário atual para verificar se o email mudou
+      const { data: currentUser, error: userError } = await supabase
+        .from('users')
+        .select('email')
+        .eq('id', userId)
+        .single();
+        
+      if (userError) {
         return { success: false, message: 'Usuário não encontrado' };
       }
-
-      // Salvar companyId antigo para verificar se mudou
-      const oldCompanyId = userToUpdate.companyId;
-
-      // Atualizar usuário
-      const updatedUser: User = {
-        ...userToUpdate,
+      
+      // Se o email mudou, atualizar na autenticação
+      if (currentUser.email !== userData.email) {
+        const { error: authError } = await supabase.auth.admin.updateUserById(
+          userId,
+          { email: userData.email }
+        );
+        
+        if (authError) {
+          return { success: false, message: `Erro ao atualizar email: ${authError.message}` };
+        }
+      }
+      
+      // Se a senha foi fornecida, atualizá-la
+      if (userData.password) {
+        const { error: passwordError } = await supabase.auth.admin.updateUserById(
+          userId,
+          { password: userData.password }
+        );
+        
+        if (passwordError) {
+          return { success: false, message: `Erro ao atualizar senha: ${passwordError.message}` };
+        }
+      }
+      
+      // Atualizar dados na tabela users
+      const updateData = {
         name: userData.name,
         email: userData.email,
         role: userData.role,
-        companyId: userData.companyId,
-        department: userData.department,
-        updatedAt: new Date()
+        company_id: userData.role === 'super_admin' ? null : userData.companyId,
+        department: userData.role === 'super_admin' ? null : userData.department,
+        updated_at: new Date().toISOString()
       };
-
-      // Atualizar mock
-      delete mockUsers[userToUpdate.email.toLowerCase()];
-      mockUsers[userData.email.toLowerCase()] = updatedUser;
-
-      // Salvar no localStorage
-      saveUserToStorage(updatedUser);
-
-      // Atualizar contadores de empresa se a empresa mudou
-      if (oldCompanyId !== userData.companyId) {
-        const updatedCompanies = { ...companies };
+      
+      const { data, error } = await supabase
+        .from('users')
+        .update(updateData)
+        .eq('id', userId)
+        .select()
+        .single();
         
-        // Decrementar da empresa antiga
-        if (oldCompanyId && updatedCompanies[oldCompanyId]) {
-          updatedCompanies[oldCompanyId] = {
-            ...updatedCompanies[oldCompanyId],
-            currentUsers: Math.max(0, updatedCompanies[oldCompanyId].currentUsers - 1)
-          };
-        }
-        
-        // Incrementar na nova empresa
-        if (userData.companyId && updatedCompanies[userData.companyId]) {
-          updatedCompanies[userData.companyId] = {
-            ...updatedCompanies[userData.companyId],
-            currentUsers: updatedCompanies[userData.companyId].currentUsers + 1
-          };
-        }
-        
-        setCompanies(updatedCompanies);
-        mockCompanies = updatedCompanies;
-        
-        saveCompaniesToStorage(updatedCompanies);
+      if (error) {
+        console.error('Erro ao atualizar usuário:', error);
+        return { success: false, message: `Erro ao atualizar usuário: ${error.message}` };
       }
+      
+      // Converter formato dos dados
+      const updatedUser: User = {
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        companyId: data.company_id,
+        department: data.department,
+        avatar: data.avatar_url,
+        permissions: [],
+        isActive: data.is_active,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : undefined
+      };
 
       // Se for o usuário atual, atualizar o estado
       if (user && user.id === userId) {
@@ -1000,99 +1385,170 @@ export const useAuth = () => {
       }
 
       return { success: true, message: 'Usuário atualizado com sucesso!', user: updatedUser };
-    } catch (error) {
-      return { success: false, message: 'Erro ao atualizar usuário' };
-    }
-  }, [companies, user]);
-
-  const toggleUserStatus = useCallback(async (userId: string): Promise<any> => {
-    try {
-      // Encontrar usuário por ID
-      const userToUpdate = Object.values(mockUsers).find(u => u.id === userId);
       
-      if (!userToUpdate) {
-        return { success: false, message: 'Usuário não encontrado' };
-      }
+    } catch (error) {
+      console.error('Erro ao atualizar usuário:', error);
+      return { success: false, message: `Erro ao atualizar usuário: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user]);
 
+  const toggleUserStatus = useCallback(async (userId: string): Promise<{ success: boolean; message: string; user?: User }> => {
+    try {
+      setIsLoading(true);
+      
       // Não permitir alteração do próprio usuário
       if (user && user.id === userId) {
         return { success: false, message: 'Você não pode alterar seu próprio status' };
       }
-
+      
+      // Buscar usuário atual
+      const { data: currentUser, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+        
+      if (userError) {
+        return { success: false, message: 'Usuário não encontrado' };
+      }
+      
       // Alternar status
+      const newStatus = !currentUser.is_active;
+      
+      // Atualizar no Supabase
+      const { data, error } = await supabase
+        .from('users')
+        .update({ 
+          is_active: newStatus,
+          updated_at: new Date().toISOString() 
+        })
+        .eq('id', userId)
+        .select()
+        .single();
+        
+      if (error) {
+        console.error('Erro ao alternar status do usuário:', error);
+        return { success: false, message: `Erro ao alternar status do usuário: ${error.message}` };
+      }
+      
+      // Converter formato dos dados
       const updatedUser: User = {
-        ...userToUpdate,
-        isActive: !userToUpdate.isActive,
-        updatedAt: new Date()
+        id: data.id,
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        companyId: data.company_id,
+        department: data.department,
+        avatar: data.avatar_url,
+        permissions: [],
+        isActive: data.is_active,
+        createdAt: new Date(data.created_at),
+        updatedAt: data.updated_at ? new Date(data.updated_at) : undefined
       };
-
-      // Atualizar mock
-      mockUsers[userToUpdate.email.toLowerCase()] = updatedUser;
-
-      // Salvar no localStorage
-      saveUserToStorage(updatedUser);
 
       const statusMessage = updatedUser.isActive ? 'ativado' : 'desativado';
-      return { 
-        success: true, 
-        message: `Usuário ${statusMessage} com sucesso!`, 
-        user: updatedUser 
-      };
+      return { success: true, message: `Usuário ${statusMessage} com sucesso!`, user: updatedUser };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao alterar status do usuário' };
+      console.error('Erro ao alternar status do usuário:', error);
+      return { success: false, message: `Erro ao alternar status do usuário: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
   }, [user]);
 
-  const deleteUser = useCallback(async (userId: string): Promise<any> => {
+  const deleteUser = useCallback(async (userId: string): Promise<{ success: boolean; message: string }> => {
     try {
-      // Encontrar usuário por ID
-      const userToDelete = Object.values(mockUsers).find(u => u.id === userId);
+      setIsLoading(true);
       
-      if (!userToDelete) {
-        return { success: false, message: 'Usuário não encontrado' };
-      }
-
       // Não permitir exclusão do próprio usuário
       if (user && user.id === userId) {
         return { success: false, message: 'Você não pode excluir sua própria conta' };
       }
-
-      // Salvar companyId para atualizar contador
-      const companyId = userToDelete.companyId;
-
-      // Remover usuário
-      delete mockUsers[userToDelete.email.toLowerCase()];
-
-      // Remover do localStorage
-      removeUserFromStorage(userId);
-
-      // Atualizar contador de usuários da empresa
-      if (companyId && companies[companyId]) {
-        const updatedCompany = { 
-          ...companies[companyId], 
-          currentUsers: Math.max(0, companies[companyId].currentUsers - 1) 
-        };
+      
+      // Verificar se o usuário existe
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
         
-        const updatedCompanies = {
-          ...companies,
-          [companyId]: updatedCompany
-        };
-        
-        setCompanies(updatedCompanies);
-        mockCompanies = updatedCompanies;
-        
-        saveCompaniesToStorage(updatedCompanies);
+      if (userError) {
+        return { success: false, message: 'Usuário não encontrado' };
       }
+      
+      // Excluir usuário da autenticação do Supabase
+      const { error: authError } = await supabase.auth.admin.deleteUser(
+        userId
+      );
+      
+      if (authError) {
+        console.error('Erro ao excluir usuário da autenticação:', authError);
+        return { success: false, message: `Erro ao excluir usuário da autenticação: ${authError.message}` };
+      }
+      
+      // O trigger no banco de dados cuidará de decrementar o contador de usuários da empresa
 
       return { success: true, message: 'Usuário excluído com sucesso!' };
+      
     } catch (error) {
-      return { success: false, message: 'Erro ao excluir usuário' };
+      console.error('Erro ao excluir usuário:', error);
+      return { success: false, message: `Erro ao excluir usuário: ${error instanceof Error ? error.message : 'Erro desconhecido'}` };
+    } finally {
+      setIsLoading(false);
     }
-  }, [companies, user]);
+  }, [user]);
 
-  const getAllUsers = useCallback(() => {
-    return mockUsers;
-  }, []);
+  const getAllUsers = useCallback(async (): Promise<User[]> => {
+    try {
+      // Verificar se é super admin para buscar todos os usuários
+      // ou se é gerente para buscar apenas usuários da empresa
+      const isAdmin = user && user.role === 'super_admin';
+      const isManager = user && user.role === 'gerente';
+      
+      let query = supabase.from('users').select('*');
+      
+      // Se for gerente, filtrar por empresa
+      if (isManager && user && user.companyId) {
+        query = query.eq('company_id', user.companyId);
+      } else if (!isAdmin) {
+        // Se não for admin nem gerente, retornar apenas o próprio usuário
+        if (!user) return [];
+        
+        query = query.eq('id', user.id);
+      }
+      
+      const { data, error } = await query;
+      
+      if (error) {
+        console.error('Erro ao buscar usuários:', error);
+        return [];
+      }
+      
+      // Converter formato dos dados
+      return data.map(userData => ({
+        id: userData.id,
+        name: userData.name,
+        email: userData.email,
+        role: userData.role,
+        companyId: userData.company_id,
+        department: userData.department,
+        avatar: userData.avatar_url,
+        lastCheckup: userData.last_checkup_date ? new Date(userData.last_checkup_date) : undefined,
+        nextCheckup: userData.next_checkup_date ? new Date(userData.next_checkup_date) : undefined,
+        permissions: [],
+        isActive: userData.is_active,
+        createdAt: new Date(userData.created_at),
+        updatedAt: userData.updated_at ? new Date(userData.updated_at) : undefined
+      }));
+      
+    } catch (error) {
+      console.error('Erro ao obter usuários:', error);
+      return [];
+    }
+  }, [user]);
 
   return {
     user,
