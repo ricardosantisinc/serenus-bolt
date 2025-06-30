@@ -40,13 +40,23 @@ Este script criará o usuário administrador padrão:
 - **Email**: admin@serenus.com  
 - **Senha**: admin123456
 
-### 4. Executar a Aplicação
+### 4. Configuração dos Planos de Assinatura
+
+Se a tabela `subscription_plans` estiver vazia ou não existir, execute:
+
+```bash
+npm run setup-plans
+```
+
+Este script verificará e, se necessário, criará a tabela de planos e inserirá os planos de assinatura padrão na sua base de dados.
+
+### 5. Executar a Aplicação
 
 ```bash
 npm run dev
 ```
 
-### 5. Fazer Login
+### 6. Fazer Login
 
 Acesse a aplicação em http://localhost:5173 e faça login com:
 - **Email**: admin@serenus.com
@@ -55,6 +65,14 @@ Acesse a aplicação em http://localhost:5173 e faça login com:
 ⚠️ **IMPORTANTE**: Altere a senha após o primeiro login!
 
 ## Solução de Problemas
+
+### Erro "relation 'public.subscription_plans' does not exist"
+
+Este erro ocorre quando a tabela de planos de assinatura não foi criada. Execute:
+
+```bash
+npm run setup-plans
+```
 
 ### Erro "Invalid login credentials"
 
