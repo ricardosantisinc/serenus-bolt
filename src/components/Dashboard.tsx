@@ -303,7 +303,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <SuperAdminDashboard 
             user={user} 
             hasPermission={hasPermission}
-            companies={getCompanies()}
+            companies={Array.isArray(getCompanies()) ? getCompanies() : Object.values(getCompanies() || {})}
             users={getAllUsers()}
             onRegisterCompany={registerCompany}
             onDeleteCompany={deleteCompany}
